@@ -1,6 +1,7 @@
 [workspace]
 members = ["crates/rait", "crates/rait-core", "crates/rait-document", "crates/rait-image", "crates/rait-pdf", "crates/rait-table"]
 resolver = "3"
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2024"
@@ -19,3 +20,6 @@ tempfile = "3.14"
 lto = "fat"
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+sevenz-rust2 = { path = "vendor/sevenz-rust2" }
