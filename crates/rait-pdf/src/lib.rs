@@ -12,9 +12,14 @@ pub use rait_core::exec::{Dependency, ExecError};
 
 use rait_core::exec;
 use rait_core::{ErrorCode, ErrorInfo, check_input};
+use rayon::prelude::*;
 use serde::Serialize;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+
+/// Fewest pages per `pdftotext` run when a range is split across threads;
+/// smaller chunks spend more on process start-up than they save.
+const MIN_CHUNK_PAGES: u32 = 8;
 
 /// `pdftotext` ends every page with a form feed.
 const PAGE_BREAK: char = '\u{c}';
@@ -235,11 +240,12 @@ pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
         .collect();
     let mut table_count = 0;
     if req.tables && !req.layout && !warnings.iter().any(|w| w == FALLBACK_WARNING) {
-        for (page, layout) in pages.iter_mut().zip(bbox(&req.path, first, last)?) {
-            let found = tables::detect(&layout);
+        let layouts = bbox(&req.path, first, last)?;
+        let detected: Vec<_> = layouts.par_iter().map(tables::detect).collect();
+        for ((page, layout), found) in pages.iter_mut().zip(&layouts).zip(detected) {
             if !found.is_empty() {
                 table_count += found.len() as u32;
-                page.text = tables::render_page(&layout, &found);
+                page.text = tables::render_page(layout, &found);
             }
         }
     }
@@ -262,9 +268,11 @@ pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
 pub fn tables(req: &TablesRequest) -> Result<PdfTables, ErrorInfo> {
     let info = info(&req.path)?;
     let (first, last) = req.pages.bounds(info.pages, "--pages")?;
+    let layouts = bbox(&req.path, first, last)?;
+    let detected: Vec<_> = layouts.par_iter().map(tables::detect).collect();
     let mut found = vec![];
-    for (page, layout) in (first..).zip(bbox(&req.path, first, last)?) {
-        for table in tables::detect(&layout) {
+    for (page, tables) in (first..).zip(detected) {
+        for table in tables {
             found.push(FoundTable {
                 page,
                 table: found.len() as u32 + 1,
@@ -280,26 +288,59 @@ pub fn tables(req: &TablesRequest) -> Result<PdfTables, ErrorInfo> {
 }
 
 fn bbox(path: &Path, first: u32, last: u32) -> Result<Vec<layout::Page>, ErrorInfo> {
-    let args: Vec<OsString> = vec![
-        "-bbox-layout".into(),
-        "-enc".into(),
-        "UTF-8".into(),
-        "-f".into(),
-        first.to_string().into(),
-        "-l".into(),
-        last.to_string().into(),
-        path.into(),
-        "-".into(),
-    ];
-    let out = exec::run(PDFTOTEXT, args).map_err(backend_error)?;
-    layout::parse(&String::from_utf8_lossy(&out.stdout)).map_err(|detail| {
-        ErrorInfo::new(
-            ErrorCode::DependencyFailed,
-            "`pdftotext` returned unreadable word positions.",
-            "Run `rait doctor` to check the Poppler install.".to_string(),
-        )
-        .with_detail(detail)
-    })
+    let mut pages = vec![];
+    for out in pdftotext(path, first, last, &["-bbox-layout"]).map_err(backend_error)? {
+        let parsed = layout::parse(&String::from_utf8_lossy(&out)).map_err(|detail| {
+            ErrorInfo::new(
+                ErrorCode::DependencyFailed,
+                "`pdftotext` returned unreadable word positions.",
+                "Run `rait doctor` to check the Poppler install.".to_string(),
+            )
+            .with_detail(detail)
+        })?;
+        pages.extend(parsed);
+    }
+    Ok(pages)
+}
+
+/// Run `pdftotext` over `first..=last`, split into page chunks that run in
+/// parallel on the current thread pool. Outputs are in page order.
+fn pdftotext(
+    path: &Path,
+    first: u32,
+    last: u32,
+    flags: &[&str],
+) -> Result<Vec<Vec<u8>>, ExecError> {
+    chunks(first, last)
+        .into_par_iter()
+        .map(|(from, to)| {
+            let mut args: Vec<OsString> = flags.iter().map(OsString::from).collect();
+            args.extend([
+                "-enc".into(),
+                "UTF-8".into(),
+                "-f".into(),
+                from.to_string().into(),
+                "-l".into(),
+                to.to_string().into(),
+                path.into(),
+                "-".into(),
+            ]);
+            exec::run(PDFTOTEXT, args).map(|out| out.stdout)
+        })
+        .collect()
+}
+
+/// Split a page range into at most one chunk per thread, each at least
+/// [`MIN_CHUNK_PAGES`] long.
+fn chunks(first: u32, last: u32) -> Vec<(u32, u32)> {
+    let pages = last - first + 1;
+    let threads = rayon::current_num_threads().max(1) as u32;
+    let count = (pages / MIN_CHUNK_PAGES).clamp(1, threads);
+    let size = pages.div_ceil(count);
+    (0..count)
+        .map(|i| (first + i * size, (first + (i + 1) * size - 1).min(last)))
+        .filter(|(from, to)| from <= to)
+        .collect()
 }
 
 pub fn search(req: &SearchRequest) -> Result<SearchResult, ErrorInfo> {
@@ -356,20 +397,9 @@ fn extract(
     layout: bool,
     warnings: &mut Vec<String>,
 ) -> Result<String, ErrorInfo> {
-    let mut args: Vec<OsString> = vec!["-enc".into(), "UTF-8".into()];
-    if layout {
-        args.push("-layout".into());
-    }
-    args.extend([
-        "-f".into(),
-        first.to_string().into(),
-        "-l".into(),
-        last.to_string().into(),
-        path.into(),
-        "-".into(),
-    ]);
-    let out = match exec::run(PDFTOTEXT, args) {
-        Ok(out) => out.stdout,
+    let flags: &[&str] = if layout { &["-layout"] } else { &[] };
+    let out = match pdftotext(path, first, last, flags) {
+        Ok(chunks) => chunks.concat(),
         Err(ExecError::Missing(_)) => {
             if !warnings.iter().any(|w| w == FALLBACK_WARNING) {
                 warnings.push(FALLBACK_WARNING.into());
@@ -431,4 +461,28 @@ fn backend_error(err: ExecError) -> ErrorInfo {
         return not_a_pdf().with_detail(err.to_string());
     }
     err.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chunks;
+
+    #[test]
+    fn chunks_cover_the_range_in_order() {
+        for (first, last) in [(1, 1), (1, 7), (3, 240), (1, 1000)] {
+            let parts = chunks(first, last);
+            assert_eq!(parts[0].0, first);
+            assert_eq!(parts[parts.len() - 1].1, last);
+            for pair in parts.windows(2) {
+                assert_eq!(pair[0].1 + 1, pair[1].0);
+            }
+            assert!(
+                parts.len() == 1
+                    || parts
+                        .iter()
+                        .all(|(a, b)| b - a + 1 >= super::MIN_CHUNK_PAGES - 1)
+            );
+        }
+        assert_eq!(chunks(1, 7), [(1, 7)]);
+    }
 }
