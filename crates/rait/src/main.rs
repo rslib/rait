@@ -71,6 +71,11 @@ enum Commands {
         #[command(subcommand)]
         command: ArchiveCommand,
     },
+    /// Inspect audio and video, grab video frames and extract audio
+    Media {
+        #[command(subcommand)]
+        command: MediaCommand,
+    },
     /// List, show and install the embedded agent skills
     Skills {
         #[command(subcommand)]
@@ -82,7 +87,7 @@ enum Commands {
 enum PdfCommand {
     /// Page count, title and encryption. More with --fields
     #[command(
-        after_help = "Examples:\n  rait pdf info paper.pdf\n  rait pdf info *.pdf --fields author,page-size"
+        after_help = "Examples:\n  rait pdf info paper.pdf\n  rait pdf info *.pdf --fields author,page_size"
     )]
     Info {
         #[arg(required = true)]
@@ -233,6 +238,82 @@ enum DocCommand {
         #[arg(long)]
         full: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum MediaCommand {
+    /// Kind, duration and main codec. More with --fields
+    #[command(
+        after_help = "Examples:\n  rait media info talk.mp4\n  rait media info *.mp3 --fields sample_rate,channels,title,artist"
+    )]
+    Info {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Extra TOON columns. JSON always has every field
+        #[arg(long, value_enum, value_delimiter = ',')]
+        fields: Vec<MediaField>,
+    },
+    /// Evenly spaced JPEG stills from a video, named <stem>-<n>.jpg
+    #[command(
+        after_help = "Examples:\n  rait media frames demo.mp4 --output frames\n  rait media frames demo.mp4 --output frames --count 12 --max 768"
+    )]
+    Frames {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        count: u32,
+        /// Shrink so the longer side is at most this many pixels
+        #[arg(long)]
+        max: Option<u32>,
+        /// Replace existing output files
+        #[arg(long)]
+        force: bool,
+    },
+    /// Extract or convert audio, for example 16 kHz mono WAV for speech-to-text
+    #[command(
+        after_help = "Examples:\n  rait media audio talk.mp4 --output audio\n  rait media audio talk.mp4 --output audio --mono --rate 16000"
+    )]
+    Audio {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, value_enum, default_value_t = AudioTo::Wav)]
+        to: AudioTo,
+        /// Mix down to one channel
+        #[arg(long)]
+        mono: bool,
+        /// Sample rate in Hz; the source rate by default
+        #[arg(long)]
+        rate: Option<u32>,
+        /// Replace existing output files
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum MediaField {
+    Bitrate,
+    Size,
+    #[value(name = "audio_codec", alias = "audio-codec")]
+    AudioCodec,
+    #[value(name = "sample_rate", alias = "sample-rate")]
+    SampleRate,
+    Channels,
+    Title,
+    Artist,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AudioTo {
+    Wav,
+    Mp3,
+    Flac,
+    Ogg,
+    M4a,
 }
 
 #[derive(Subcommand)]
@@ -396,6 +477,7 @@ enum TableCommand {
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
 enum InfoField {
     Author,
+    #[value(name = "page_size", alias = "page-size")]
     PageSize,
 }
 
@@ -481,6 +563,7 @@ fn run(cli: Cli) -> Result<Option<Output>, ErrorInfo> {
         Commands::Table { command } => run_table(command, jobs, max_chars).map(Some),
         Commands::Image { command } => run_image(command, jobs, max_chars).map(Some),
         Commands::Archive { command } => run_archive(command, jobs, max_chars).map(Some),
+        Commands::Media { command } => run_media(command, jobs).map(Some),
         Commands::Skills { command } => run_skills(command, cli.format),
     }
 }
@@ -706,6 +789,104 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
         }
     };
     Ok(output)
+}
+
+fn run_media(command: MediaCommand, jobs: usize) -> Result<Output, ErrorInfo> {
+    Ok(match command {
+        MediaCommand::Info { files, fields } => Output::new(
+            "media",
+            "file",
+            each(jobs, "media.info", files, |path| {
+                let mut info = rait_media::info(path)?;
+                let warnings = std::mem::take(&mut info.warnings);
+                item(info, None, warnings)
+            }),
+        )
+        .shape(move |data| {
+            let mut row = Map::new();
+            for key in ["kind", "duration", "codec"] {
+                row.insert(key.into(), data[key].clone());
+            }
+            for field in &fields {
+                let key = match field {
+                    MediaField::Size => {
+                        let size = match (data["width"].as_u64(), data["height"].as_u64()) {
+                            (Some(w), Some(h)) => json!(format!("{w}x{h}")),
+                            _ => Value::Null,
+                        };
+                        row.insert("size".into(), size);
+                        continue;
+                    }
+                    MediaField::Bitrate => "bitrate",
+                    MediaField::AudioCodec => "audio_codec",
+                    MediaField::SampleRate => "sample_rate",
+                    MediaField::Channels => "channels",
+                    MediaField::Title => "title",
+                    MediaField::Artist => "artist",
+                };
+                row.insert(key.into(), data[key].clone());
+            }
+            Value::Object(row)
+        })
+        .help([
+            "Run `rait media frames <file> --output <dir>` for video stills",
+            "Run `rait media audio <file> --output <dir> --mono --rate 16000` for speech-ready audio",
+        ]),
+        MediaCommand::Frames {
+            files,
+            output,
+            count,
+            max,
+            force,
+        } => {
+            unique_stems(&files)?;
+            Output::new(
+                "frames",
+                "file",
+                each(jobs, "media.frames", files, |path| {
+                    to_value(rait_media::frames(&rait_media::FramesRequest {
+                        path: path.into(),
+                        output_dir: output.clone(),
+                        count,
+                        max,
+                        force,
+                    })?)
+                }),
+            )
+            .help(["Run `rait image info <frame>...` for frame sizes, or open the frames to view them"])
+        }
+        MediaCommand::Audio {
+            files,
+            output,
+            to,
+            mono,
+            rate,
+            force,
+        } => {
+            unique_stems(&files)?;
+            let format = match to {
+                AudioTo::Wav => rait_media::AudioFormat::Wav,
+                AudioTo::Mp3 => rait_media::AudioFormat::Mp3,
+                AudioTo::Flac => rait_media::AudioFormat::Flac,
+                AudioTo::Ogg => rait_media::AudioFormat::Ogg,
+                AudioTo::M4a => rait_media::AudioFormat::M4a,
+            };
+            Output::new(
+                "audio",
+                "file",
+                each(jobs, "media.audio", files, |path| {
+                    to_value(rait_media::audio(&rait_media::AudioRequest {
+                        path: path.into(),
+                        output_dir: output.clone(),
+                        format,
+                        mono,
+                        rate,
+                        force,
+                    })?)
+                }),
+            )
+        }
+    })
 }
 
 fn run_archive(
@@ -1278,6 +1459,7 @@ fn doctor() -> Output {
     let records = DEPENDENCIES
         .iter()
         .chain(rait_image::DEPENDENCIES)
+        .chain(rait_media::DEPENDENCIES)
         .enumerate()
         .map(|(id, dep)| {
             let (available, version) = match dep.probe() {
@@ -1316,6 +1498,7 @@ fn home() -> Value {
     let missing: Vec<&str> = DEPENDENCIES
         .iter()
         .chain(rait_image::DEPENDENCIES)
+        .chain(rait_media::DEPENDENCIES)
         .filter(|dep| dep.probe().is_err())
         .map(|dep| dep.program)
         .collect();
@@ -1342,13 +1525,13 @@ fn home() -> Value {
     if files.is_empty() {
         doc.insert(
             "files".into(),
-            json!("0 PDF, document, table, image or archive files in the current directory"),
+            json!("0 supported files in the current directory"),
         );
     } else {
         doc.insert(
             "count".into(),
             json!(format!(
-                "{} of {} PDF, document, table, image and archive files in the current directory",
+                "{} of {} supported files in the current directory",
                 files.len().min(HOME_FILE_LIMIT),
                 files.len()
             )),
@@ -1376,7 +1559,11 @@ fn is_supported(name: &str) -> bool {
         || path
             .extension()
             .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| rait_archive::EXTENSIONS.contains(&ext.to_lowercase().as_str()))
+            .is_some_and(|ext| {
+                let ext = ext.to_lowercase();
+                rait_archive::EXTENSIONS.contains(&ext.as_str())
+                    || rait_media::EXTENSIONS.contains(&ext.as_str())
+            })
         || path
             .extension()
             .and_then(|ext| ext.to_str())

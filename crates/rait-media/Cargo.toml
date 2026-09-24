@@ -1,0 +1,16 @@
+[package]
+name = "rait-media"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+rait-core = { path = "../rait-core" }
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+symphonia = { version = "0.6", default-features = false, features = ["all", "exp-video-codecs", "opt-simd"] }
+
+[dev-dependencies]
+tempfile.workspace = true

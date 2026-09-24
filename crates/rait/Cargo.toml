@@ -11,6 +11,7 @@ rait-archive = { path = "../rait-archive" }
 rait-core = { path = "../rait-core" }
 rait-document = { path = "../rait-document" }
 rait-image = { path = "../rait-image" }
+rait-media = { path = "../rait-media" }
 rait-pdf = { path = "../rait-pdf" }
 rait-table = { path = "../rait-table" }
 serde.workspace = true

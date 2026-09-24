@@ -303,7 +303,7 @@ fn doctor_reports_missing_programs_without_failing() {
         assert_eq!(record["data"]["available"], false);
     }
     let toon = stdout(&without_programs(&["doctor"]));
-    assert!(toon.contains("programs[6]{program,available,version,used_by}:"));
+    assert!(toon.contains("programs[8]{program,available,version,used_by}:"));
     assert!(toon.contains("Install pdfinfo (built-in reader used meanwhile)"));
 }
 
@@ -433,7 +433,7 @@ fn claude_installs_write_expected_layouts() {
 #[test]
 fn home_view_lists_pdfs_in_working_directory() {
     let sandbox = Sandbox::new();
-    assert!(stdout(&sandbox.run(&[])).contains("0 PDF, document, table, image or archive files"));
+    assert!(stdout(&sandbox.run(&[])).contains("0 supported files"));
     std::fs::copy(FIXTURE, sandbox.path().join("a.pdf")).unwrap();
     std::fs::copy(fixture("sample.docx"), sandbox.path().join("b.docx")).unwrap();
     std::fs::copy(fixture("tiny.gif"), sandbox.path().join("c.gif")).unwrap();
@@ -667,4 +667,53 @@ fn archive_list_read_and_extract() {
     ]);
     assert_eq!(out.status.code(), Some(1));
     assert!(stdout(&out).contains("output_exists"));
+}
+
+#[test]
+fn media_info_frames_and_audio() {
+    let media = |name: &str| fixture(&format!("media/{name}"));
+    let toon = stdout(&run(&[
+        "media",
+        "info",
+        &media("clip.mp4"),
+        &media("tone.flac"),
+        "--fields",
+        "size,audio_codec,title",
+    ]));
+    assert!(
+        toon.contains("media[2]{file,kind,duration,codec,size,audio_codec,title}:"),
+        "{toon}"
+    );
+    assert!(toon.contains(",video,"), "{toon}");
+    assert!(toon.contains(",audio,1,flac,null,flac,RAIT Tone"), "{toon}");
+    if !has("ffmpeg") {
+        return;
+    }
+    let sandbox = Sandbox::new();
+    let out = sandbox.run(&[
+        "--format",
+        "json",
+        "media",
+        "frames",
+        &media("clip.mp4"),
+        "--output",
+        "f",
+        "--count",
+        "2",
+    ]);
+    assert!(out.status.success(), "{}", stdout(&out));
+    assert_eq!(json(&out)[0]["data"]["frames"].as_array().unwrap().len(), 2);
+    assert!(sandbox.path().join("f/clip-1.jpg").exists());
+    let out = sandbox.run(&[
+        "media",
+        "audio",
+        &media("clip.mp4"),
+        "--output",
+        "a",
+        "--mono",
+        "--rate",
+        "16000",
+    ]);
+    assert!(out.status.success(), "{}", stdout(&out));
+    assert!(sandbox.path().join("a/clip.wav").exists());
 }
