@@ -21,8 +21,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const PDF_SKILL: &str = include_str!("../../../skills/pdf/SKILL.md");
-const HOME_PDF_LIMIT: usize = 20;
+const SKILL: &str = include_str!("../../../skills/rait/SKILL.md");
+const SKILL_NAME: &str = "rait";
+const HOME_FILE_LIMIT: usize = 20;
 
 #[derive(Parser)]
 #[command(name = "rait", version, about = DESCRIPTION)]
@@ -48,6 +49,11 @@ enum Commands {
     Pdf {
         #[command(subcommand)]
         command: PdfCommand,
+    },
+    /// Read DOCX, PPTX, EPUB and HTML documents as Markdown
+    Doc {
+        #[command(subcommand)]
+        command: DocCommand,
     },
     /// List, show and install the embedded agent skills
     Skills {
@@ -163,6 +169,25 @@ enum PdfCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum DocCommand {
+    /// Markdown text with headings, lists and tables. Parts are sections split at
+    /// level-1 headings (DOCX, HTML), slides (PPTX) or chapters (EPUB)
+    #[command(
+        after_help = "Examples:\n  rait doc text report.docx\n  rait doc text deck.pptx --parts 2-4\n  rait doc text book.epub --parts 3 --full"
+    )]
+    Text {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// A part like 4 or a closed range like 2-7
+        #[arg(long)]
+        parts: Option<String>,
+        /// Do not apply --max-chars
+        #[arg(long)]
+        full: bool,
+    },
+}
+
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
 enum InfoField {
     Author,
@@ -247,6 +272,7 @@ fn run(cli: Cli) -> Result<Option<Output>, ErrorInfo> {
     match cli.command {
         Commands::Doctor => Ok(Some(doctor())),
         Commands::Pdf { command } => run_pdf(command, jobs, max_chars).map(Some),
+        Commands::Doc { command } => run_doc(command, jobs, max_chars).map(Some),
         Commands::Skills { command } => run_skills(command, cli.format),
     }
 }
@@ -285,11 +311,20 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                     };
                     let mut text = rait_pdf::text(&req)?;
                     let warnings = std::mem::take(&mut text.warnings);
-                    let truncation = if full {
-                        None
-                    } else {
-                        limit_pages(path, &mut text.pages, max_chars)
-                    };
+                    let mut truncation = None;
+                    if !full {
+                        let units = std::mem::take(&mut text.pages)
+                            .into_iter()
+                            .map(|page| (page.page, page.text))
+                            .collect();
+                        let retry = format!("rait pdf text {} --pages", quoted(path));
+                        let (kept, cut) = limit_units(units, max_chars, &retry, "Page");
+                        text.pages = kept
+                            .into_iter()
+                            .map(|(page, text)| PageText { page, text })
+                            .collect();
+                        truncation = cut;
+                    }
                     item(text, truncation, warnings)
                 }),
             )
@@ -318,7 +353,7 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                     total_chars: result.matched_chars,
                     hint: format!(
                         "Run `rait pdf search {} {} --full` for all {} hits",
-                        shell_quote(&protocol_or_display(path)),
+                        quoted(path),
                         shell_quote(&query),
                         result.matches
                     ),
@@ -438,39 +473,69 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
     Ok(output)
 }
 
-/// Keep whole pages within `max_chars` and point at the pages left out.
-fn limit_pages(path: &Path, pages: &mut Vec<PageText>, max_chars: usize) -> Option<Truncation> {
-    let numbers: Vec<u32> = pages.iter().map(|page| page.page).collect();
-    let first_len = pages.first().map_or(0, |page| page.text.chars().count());
-    let texts = std::mem::take(pages)
-        .into_iter()
-        .map(|page| page.text)
-        .collect();
-    let (kept, truncation) = limit_chunks(texts, max_chars);
-    *pages = numbers
-        .iter()
-        .zip(kept)
-        .map(|(&page, text)| PageText { page, text })
-        .collect();
-    let mut truncation = truncation?;
-    let file = shell_quote(&protocol_or_display(path));
-    let last = *numbers.last()?;
-    let first_cut = pages.len() == 1 && first_len > max_chars;
-    truncation.hint = if first_cut {
+fn run_doc(command: DocCommand, jobs: usize, max_chars: usize) -> Result<Output, ErrorInfo> {
+    let DocCommand::Text { files, parts, full } = command;
+    let parts = PageRange::parse(parts.as_deref())?;
+    Ok(Output::new(
+        "texts",
+        "file",
+        each(jobs, "doc.text", files, |path| {
+            let mut doc = rait_document::text(&rait_document::TextRequest {
+                path: path.into(),
+                parts,
+            })?;
+            let warnings = std::mem::take(&mut doc.warnings);
+            let mut truncation = None;
+            if !full {
+                let units = std::mem::take(&mut doc.parts)
+                    .into_iter()
+                    .map(|part| (part.part, part.text))
+                    .collect();
+                let retry = format!("rait doc text {} --parts", quoted(path));
+                let (kept, cut) = limit_units(units, max_chars, &retry, "Part");
+                doc.parts = kept
+                    .into_iter()
+                    .map(|(part, text)| rait_document::Part { part, text })
+                    .collect();
+                truncation = cut;
+            }
+            item(doc, truncation, warnings)
+        }),
+    ))
+}
+
+/// Keep whole units (pages or parts) within `max_chars` and point at the ones left
+/// out. `retry` is the command that selects units, such as `rait pdf text f --pages`.
+fn limit_units(
+    units: Vec<(u32, String)>,
+    max_chars: usize,
+    retry: &str,
+    noun: &str,
+) -> (Vec<(u32, String)>, Option<Truncation>) {
+    let numbers: Vec<u32> = units.iter().map(|(n, _)| *n).collect();
+    let first_len = units.first().map_or(0, |(_, text)| text.chars().count());
+    let (kept, truncation) =
+        limit_chunks(units.into_iter().map(|(_, text)| text).collect(), max_chars);
+    let kept: Vec<(u32, String)> = numbers.iter().copied().zip(kept).collect();
+    let Some(mut truncation) = truncation else {
+        return (kept, None);
+    };
+    let last = numbers[numbers.len() - 1];
+    truncation.hint = if kept.len() == 1 && first_len > max_chars {
         format!(
-            "Page {} alone passes --max-chars. Run `rait pdf text {file} --pages {} --full`",
+            "{noun} {} alone passes --max-chars. Run `{retry} {} --full`",
             numbers[0], numbers[0]
         )
     } else {
-        let next = numbers[pages.len()];
+        let next = numbers[kept.len()];
         let rest = if next == last {
             next.to_string()
         } else {
             format!("{next}-{last}")
         };
-        format!("Run `rait pdf text {file} --pages {rest}` for the rest, or add --full")
+        format!("Run `{retry} {rest}` for the rest, or add --full")
     };
-    Some(truncation)
+    (kept, Some(truncation))
 }
 
 /// TOON columns for `pdf info`. Every row gets the same keys so TOON prints a table.
@@ -502,7 +567,7 @@ fn run_skills(command: SkillsCommand, format: Format) -> Result<Option<Output>, 
                 vec![Record::success(
                     0,
                     "skills.list",
-                    "pdf".into(),
+                    SKILL_NAME.into(),
                     json!({ "description": guide::SKILL_DESCRIPTION }),
                 )],
             )
@@ -512,11 +577,11 @@ fn run_skills(command: SkillsCommand, format: Format) -> Result<Option<Output>, 
             ]),
         )),
         SkillsCommand::Show { name } => {
-            if name != "pdf" {
+            if name != SKILL_NAME {
                 return Err(ErrorInfo::new(
                     ErrorCode::InvalidInput,
-                    format!("Unknown skill `{name}`. Available: pdf."),
-                    "Run `rait skills show pdf`.".to_string(),
+                    format!("Unknown skill `{name}`. Available: {SKILL_NAME}."),
+                    format!("Run `rait skills show {SKILL_NAME}`."),
                 ));
             }
             if format == Format::Json {
@@ -526,12 +591,12 @@ fn run_skills(command: SkillsCommand, format: Format) -> Result<Option<Output>, 
                     vec![Record::success(
                         0,
                         "skills.show",
-                        "pdf".into(),
-                        json!({ "markdown": PDF_SKILL }),
+                        SKILL_NAME.into(),
+                        json!({ "markdown": SKILL }),
                     )],
                 )));
             }
-            write_stdout(PDF_SKILL);
+            write_stdout(SKILL);
             Ok(None)
         }
         SkillsCommand::Install {
@@ -540,7 +605,7 @@ fn run_skills(command: SkillsCommand, format: Format) -> Result<Option<Output>, 
             force,
         } => {
             let path = skill_path(target, scope)?;
-            let record = record(0, "skills.install", "pdf".into(), || {
+            let record = record(0, "skills.install", SKILL_NAME.into(), || {
                 let status = if install_skill(&path, force)? {
                     "installed"
                 } else {
@@ -583,6 +648,10 @@ fn record(id: usize, command: &str, input: String, op: impl FnOnce() -> ItemResu
         }
         Err(err) => Record::failure(id, command, input, err),
     }
+}
+
+fn quoted(path: &Path) -> String {
+    shell_quote(&protocol_or_display(path))
 }
 
 fn protocol_or_display(path: &Path) -> String {
@@ -672,14 +741,14 @@ fn home() -> Value {
         .filter(|dep| dep.probe().is_err())
         .map(|dep| dep.program)
         .collect();
-    let mut pdfs: Vec<String> = fs::read_dir(".")
+    let mut files: Vec<String> = fs::read_dir(".")
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| name.to_lowercase().ends_with(".pdf"))
+        .filter(|name| is_supported(name))
         .collect();
-    pdfs.sort();
+    files.sort();
     let mut doc = Map::new();
     doc.insert("bin".into(), json!(bin));
     doc.insert("description".into(), json!(DESCRIPTION));
@@ -692,22 +761,25 @@ fn home() -> Value {
         }),
     );
     let mut help = vec![];
-    if pdfs.is_empty() {
-        doc.insert("pdfs".into(), json!("0 PDF files in the current directory"));
+    if files.is_empty() {
+        doc.insert(
+            "files".into(),
+            json!("0 PDF or document files in the current directory"),
+        );
     } else {
         doc.insert(
             "count".into(),
             json!(format!(
-                "{} of {} PDF files in the current directory",
-                pdfs.len().min(HOME_PDF_LIMIT),
-                pdfs.len()
+                "{} of {} PDF and document files in the current directory",
+                files.len().min(HOME_FILE_LIMIT),
+                files.len()
             )),
         );
-        if pdfs.len() > HOME_PDF_LIMIT {
-            help.push(format!("Run `ls *.pdf` for all {} PDF files", pdfs.len()));
+        if files.len() > HOME_FILE_LIMIT {
+            help.push(format!("Run `ls` for all {} files", files.len()));
         }
-        pdfs.truncate(HOME_PDF_LIMIT);
-        doc.insert("pdfs".into(), json!(pdfs));
+        files.truncate(HOME_FILE_LIMIT);
+        doc.insert("files".into(), json!(files));
     }
     if !missing.is_empty() {
         help.push("Run `rait doctor` to see install commands".into());
@@ -715,6 +787,13 @@ fn home() -> Value {
     help.extend(GUIDE.iter().map(|line| line.to_string()));
     doc.insert("help".into(), json!(help));
     Value::Object(doc)
+}
+
+fn is_supported(name: &str) -> bool {
+    let path = Path::new(name);
+    path.extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+        || rait_document::Format::from_path(path).is_some()
 }
 
 fn tilde(path: &Path) -> String {
@@ -814,7 +893,7 @@ fn skill_path(target: SkillTarget, scope: SkillScope) -> Result<PathBuf, ErrorIn
         (SkillTarget::Claude, SkillScope::User) => user_home()?.join(".claude/skills"),
         (SkillTarget::Claude, SkillScope::Project) => PathBuf::from(".claude/skills"),
     };
-    Ok(base.join("rait-pdf/SKILL.md"))
+    Ok(base.join(SKILL_NAME).join("SKILL.md"))
 }
 
 fn user_home() -> Result<PathBuf, ErrorInfo> {
@@ -830,7 +909,7 @@ fn user_home() -> Result<PathBuf, ErrorInfo> {
 /// Returns whether the file changed. An identical existing file is a no-op.
 fn install_skill(path: &Path, force: bool) -> Result<bool, ErrorInfo> {
     if let Ok(existing) = fs::read(path) {
-        if existing == PDF_SKILL.as_bytes() {
+        if existing == SKILL.as_bytes() {
             return Ok(false);
         }
         if !force {
@@ -846,7 +925,7 @@ fn install_skill(path: &Path, force: bool) -> Result<bool, ErrorInfo> {
         .ok_or_else(|| ErrorInfo::new(ErrorCode::InvalidInput, "Invalid skill path.", None))?;
     fs::create_dir_all(parent).map_err(|err| write_error("create skill directory", err))?;
     let tmp = path.with_extension("md.rait-tmp");
-    fs::write(&tmp, PDF_SKILL).map_err(|err| write_error("write skill file", err))?;
+    fs::write(&tmp, SKILL).map_err(|err| write_error("write skill file", err))?;
     fs::rename(&tmp, path).map_err(|err| write_error("install skill file", err))?;
     Ok(true)
 }

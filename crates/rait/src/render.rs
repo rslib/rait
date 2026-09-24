@@ -200,12 +200,19 @@ pub fn shell_quote(text: &str) -> String {
 
 fn print_text(record: &Record) {
     let line = match (&record.data, &record.error) {
-        (Some(data), _) => match data.get("pages").and_then(Value::as_array) {
-            Some(pages) => pages
-                .iter()
-                .filter_map(|page| page["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
+        (Some(data), _) => match data
+            .get("pages")
+            .or(data.get("parts"))
+            .and_then(Value::as_array)
+        {
+            Some(units) => {
+                units
+                    .iter()
+                    .filter_map(|unit| unit["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+                    + "\n"
+            }
             None => format!("{}: {data}\n", record.input),
         },
         (None, Some(err)) => format!("{}: {:?}: {}\n", record.input, err.code, err.message),

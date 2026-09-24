@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rait", "crates/rait-core", "crates/rait-pdf"]
+members = ["crates/rait", "crates/rait-core", "crates/rait-document", "crates/rait-pdf"]
 resolver = "3"
 
 [workspace.package]

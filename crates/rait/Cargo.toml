@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 clap.workspace = true
 rait-core = { path = "../rait-core" }
+rait-document = { path = "../rait-document" }
 rait-pdf = { path = "../rait-pdf" }
 serde.workspace = true
 serde_json.workspace = true

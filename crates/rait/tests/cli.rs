@@ -10,6 +10,10 @@ const TWO_PAGES: &str = concat!(
     "/../../tests/fixtures/two-pages.pdf"
 );
 
+fn fixture(name: &str) -> String {
+    format!("{}/../../tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
+}
+
 /// A throwaway directory used as both the working directory and `$HOME`.
 struct Sandbox(tempfile::TempDir);
 
@@ -401,9 +405,9 @@ fn install(sandbox: &Sandbox, extra: &[&str]) -> Output {
 fn skill_install_is_safe_and_idempotent() {
     let sandbox = Sandbox::new();
     assert!(install(&sandbox, &[]).status.success());
-    let path = sandbox.path().join(".agents/skills/rait-pdf/SKILL.md");
+    let path = sandbox.path().join(".agents/skills/rait/SKILL.md");
     let first = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(first, include_str!("../../../skills/pdf/SKILL.md"));
+    assert_eq!(first, include_str!("../../../skills/rait/SKILL.md"));
     let again = install(&sandbox, &[]);
     assert!(again.status.success());
     assert!(stdout(&again).contains("already installed (no-op)"));
@@ -423,18 +427,60 @@ fn claude_installs_write_expected_layouts() {
         let out = sandbox.run(&["skills", "install", "--target", "claude", "--scope", scope]);
         assert!(out.status.success());
     }
-    assert!(
-        sandbox
-            .path()
-            .join(".claude/skills/rait-pdf/SKILL.md")
-            .exists()
-    );
+    assert!(sandbox.path().join(".claude/skills/rait/SKILL.md").exists());
 }
 
 #[test]
 fn home_view_lists_pdfs_in_working_directory() {
     let sandbox = Sandbox::new();
-    assert!(stdout(&sandbox.run(&[])).contains("0 PDF files"));
+    assert!(stdout(&sandbox.run(&[])).contains("0 PDF or document files"));
     std::fs::copy(FIXTURE, sandbox.path().join("a.pdf")).unwrap();
-    assert!(stdout(&sandbox.run(&[])).contains("pdfs[1]: a.pdf"));
+    std::fs::copy(fixture("sample.docx"), sandbox.path().join("b.docx")).unwrap();
+    std::fs::write(sandbox.path().join("c.txt"), "x").unwrap();
+    assert!(stdout(&sandbox.run(&[])).contains("files[2]: a.pdf,b.docx"));
+}
+
+#[test]
+fn doc_text_returns_markdown_parts() {
+    let docx = fixture("sample.docx");
+    let toon = stdout(&run(&["doc", "text", &docx]));
+    assert!(toon.contains("format: docx"));
+    assert!(toon.contains("total_parts: 2"));
+    assert!(toon.contains("parts[2]{part,text}:"));
+    assert!(toon.contains("| EU | 10 | 12 |"));
+    let out = run(&["--format", "json", "doc", "text", &docx, "--parts", "2"]);
+    let data = &json(&out)[0]["data"];
+    assert_eq!(data["parts"].as_array().unwrap().len(), 1);
+    assert!(
+        data["parts"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("# Results")
+    );
+}
+
+#[test]
+fn doc_text_truncates_by_part() {
+    let out = run(&[
+        "--format",
+        "json",
+        "--max-chars",
+        "150",
+        "doc",
+        "text",
+        &fixture("sample.pptx"),
+    ]);
+    let record = &json(&out)[0];
+    assert_eq!(record["data"]["parts"].as_array().unwrap().len(), 1);
+    let hint = record["truncation"]["hint"].as_str().unwrap();
+    assert!(hint.contains("--parts 2-3`"), "{hint}");
+}
+
+#[test]
+fn doc_text_rejects_unsupported_files() {
+    let sandbox = Sandbox::new();
+    std::fs::write(sandbox.path().join("notes.txt"), "x").unwrap();
+    let out = sandbox.run(&["--format", "json", "doc", "text", "notes.txt"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(json(&out)[0]["error"]["code"], "invalid_input");
 }

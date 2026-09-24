@@ -1,0 +1,16 @@
+[package]
+name = "rait-document"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+quick-xml = "0.42"
+rait-core = { path = "../rait-core" }
+scraper = "0.27"
+serde.workspace = true
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[dev-dependencies]
+tempfile.workspace = true
