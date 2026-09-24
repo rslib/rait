@@ -325,7 +325,7 @@ fn failures_render_as_errors_table_with_stderr_detail() {
 fn missing_subcommand_lists_subcommands() {
     let out = run(&["pdf"]);
     assert_eq!(out.status.code(), Some(2));
-    assert!(stdout(&out).contains("<info|text|search|render|split|merge|ocr>"));
+    assert!(stdout(&out).contains("<info|text|tables|search|render|split|merge|ocr>"));
 }
 
 #[test]
@@ -530,4 +530,54 @@ fn table_rows_truncation_names_the_rest() {
         hint.contains(&format!("--rows {}-20`", shown + 1)),
         "{hint}"
     );
+}
+
+#[test]
+fn pdf_tables_and_doc_tables_print_toon_tables() {
+    let toon = stdout(&run(&[
+        "pdf",
+        "tables",
+        &fixture("tables.pdf"),
+        "--pages",
+        "1",
+    ]));
+    assert!(
+        toon.contains("rows[4]{Region,Q1,Q2,Growth}:\n          EU,10,12,20%"),
+        "{toon}"
+    );
+    let toon = stdout(&run(&["doc", "tables", &fixture("sample.docx")]));
+    assert!(toon.contains("rows[2]{Region,Q1,Q2}:"), "{toon}");
+    let toon = stdout(&run(&[
+        "pdf",
+        "tables",
+        &fixture("tables.pdf"),
+        "--pages",
+        "3",
+    ]));
+    assert!(toon.contains("No tables found"), "{toon}");
+}
+
+#[test]
+fn pdf_text_reports_inline_tables() {
+    let out = run(&[
+        "--format",
+        "json",
+        "pdf",
+        "text",
+        &fixture("tables.pdf"),
+        "--pages",
+        "4",
+    ]);
+    assert_eq!(json(&out)[0]["data"]["tables"], 2);
+    let out = run(&[
+        "--format",
+        "json",
+        "pdf",
+        "text",
+        &fixture("tables.pdf"),
+        "--pages",
+        "4",
+        "--no-tables",
+    ]);
+    assert_eq!(json(&out)[0]["data"]["tables"], 0);
 }

@@ -50,6 +50,7 @@ fn extracts_fixture_text() {
         path: fixture().into(),
         pages: PageRange::Single(1),
         layout: false,
+        tables: true,
     };
     let text = rait_pdf::text(&req).unwrap();
     assert_eq!(text.pages.len(), 1);
@@ -103,4 +104,96 @@ fn searches_fixture_by_page() {
     })
     .unwrap();
     assert_eq!(strict.matches, 0);
+}
+
+fn tables_fixture() -> std::path::PathBuf {
+    Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/tables.pdf"
+    ))
+    .into()
+}
+
+fn table_rows(page: u32) -> Vec<Vec<serde_json::Value>> {
+    let found = rait_pdf::tables(&rait_pdf::TablesRequest {
+        path: tables_fixture(),
+        pages: PageRange::Single(page),
+    })
+    .unwrap();
+    found
+        .tables
+        .iter()
+        .flat_map(|t| {
+            let header: Vec<serde_json::Value> =
+                t.rows[0].keys().map(|k| k.as_str().into()).collect();
+            std::iter::once(header).chain(t.rows.iter().map(|r| r.values().cloned().collect()))
+        })
+        .collect()
+}
+
+#[test]
+fn detects_borderless_table() {
+    let rows = table_rows(1);
+    assert_eq!(rows[0], ["Region", "Q1", "Q2", "Growth"]);
+    assert_eq!(
+        rows[2],
+        [serde_json::json!("US"), 7.into(), 9.into(), "28.6%".into()]
+    );
+    assert_eq!(rows.len(), 5);
+}
+
+#[test]
+fn joins_wrapped_cells_in_ruled_table() {
+    let rows = table_rows(2);
+    assert_eq!(rows[0], ["System", "Description", "Latency (ms)"]);
+    assert_eq!(
+        rows[1][1],
+        "An embeddable persistent key-value store built for fast flash storage and heavy write loads"
+    );
+    assert_eq!(
+        rows[3][1],
+        "A storage engine with document-level concurrency and compression"
+    );
+}
+
+#[test]
+fn two_column_prose_is_not_a_table() {
+    assert!(table_rows(3).is_empty());
+}
+
+#[test]
+fn spanning_header_labels_each_column() {
+    let found = rait_pdf::tables(&rait_pdf::TablesRequest {
+        path: tables_fixture(),
+        pages: PageRange::Single(4),
+    })
+    .unwrap();
+    assert_eq!(found.tables.len(), 2);
+    let header: Vec<&String> = found.tables[0].rows[0].keys().collect();
+    assert_eq!(
+        header,
+        ["Workload", "Latency (us) p50", "Latency (us) p99", "Ops"]
+    );
+    assert_eq!(found.tables[1].rows[2]["Value"], "LZ4");
+}
+
+#[test]
+fn text_inlines_tables_unless_disabled() {
+    let req = |tables| rait_pdf::TextRequest {
+        path: tables_fixture(),
+        pages: PageRange::Single(1),
+        layout: false,
+        tables,
+    };
+    let with = rait_pdf::text(&req(true)).unwrap();
+    assert_eq!(with.tables, 1);
+    let text = &with.pages[0].text;
+    assert!(text.contains(
+        "| Region | Q1 | Q2 | Growth |\n| --- | --- | --- | --- |\n| EU | 10 | 12 | 20% |"
+    ));
+    assert!(text.starts_with("Quarterly Results\n\nThis report summarizes"));
+    assert!(text.contains("Overall bookings grew"));
+    let without = rait_pdf::text(&req(false)).unwrap();
+    assert_eq!(without.tables, 0);
+    assert!(!without.pages[0].text.contains("| Region"));
 }

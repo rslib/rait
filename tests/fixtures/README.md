@@ -65,3 +65,38 @@ zip entry timestamps and `docProps/core.xml` `modified` value afterward,
 because openpyxl's writer otherwise stamps `modified` with the current time
 on every save. Re-running `make-tables.sh` produces byte-for-byte
 reproducible output for all of the table fixtures.
+
+## Generated PDF table fixture
+
+`tables.pdf` is generated from `tables.tex` by running
+`tests/fixtures/make-pdf-tables.sh`, which builds it with `pdflatex` in a
+temporary directory and copies only the resulting PDF back into
+`tests/fixtures/`. All of the text is original, written for this repository
+about storage systems, with no external source. The document is four pages:
+
+- Page 1, "Quarterly Results", has a short paragraph, a borderless
+  `booktabs` table (region, Q1, Q2, growth percentage) and a closing
+  paragraph. It tests detection of a table with no ruling except the
+  `booktabs` top, mid and bottom rules and no vertical rules at all.
+- Page 2, "Storage Engines", has a fully ruled table (`\hline` between
+  every row, `|` vertical rules between every column) comparing RocksDB,
+  LevelDB and WiredTiger, with a `p{5cm}` description column whose RocksDB
+  and WiredTiger cells wrap onto multiple lines. It tests detection of a
+  conventional grid-ruled table with wrapped cell text.
+- Page 3, "Design Notes", is two-column prose with no table at all: about
+  350 words split across several paragraphs on the storage engine write
+  path, in-memory buffering, reads and background compaction. It has no
+  table and exists only to check that a table detector does not report a
+  false positive on justified two-column body text.
+- Page 4, "Latency Breakdown", has a `booktabs` table with a spanning
+  header (`Latency (us)` spans a `p50`/`p99` sub-header via
+  `\multicolumn` and `\cmidrule`) followed by a separate small two-column
+  key/value `booktabs` table of configuration settings. It tests detection
+  of a table with a multi-row spanning header and of a second, much
+  smaller table on the same page.
+
+The script exports `SOURCE_DATE_EPOCH=0` and `FORCE_SOURCE_DATE=1`, and the
+document's preamble sets `\pdfinfoomitdate=1`, `\pdftrailerid{}` and
+`\pdfsuppressptexinfo=-1`, so `tables.pdf` has no embedded build date or
+trailer ID and re-running `make-pdf-tables.sh` produces a byte-for-byte
+identical PDF.

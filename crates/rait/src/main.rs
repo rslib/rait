@@ -90,9 +90,26 @@ enum PdfCommand {
         /// A page like 4 or a closed range like 2-7
         #[arg(long)]
         pages: Option<String>,
-        /// Keep the physical layout
+        /// Keep the physical layout instead of detecting tables
         #[arg(long)]
         layout: bool,
+        /// Keep detected tables as plain text lines
+        #[arg(long)]
+        no_tables: bool,
+        /// Do not apply --max-chars
+        #[arg(long)]
+        full: bool,
+    },
+    /// Tables detected from word positions, as rows keyed by the header
+    #[command(
+        after_help = "Examples:\n  rait pdf tables paper.pdf\n  rait pdf tables paper.pdf --pages 4-6\n\nDetection is a heuristic: it finds cells from aligned gaps between words."
+    )]
+    Tables {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// A page like 4 or a closed range like 2-7
+        #[arg(long)]
+        pages: Option<String>,
         /// Do not apply --max-chars
         #[arg(long)]
         full: bool,
@@ -360,6 +377,7 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
             files,
             pages,
             layout,
+            no_tables,
             full,
         } => {
             let pages = PageRange::parse(pages.as_deref())?;
@@ -371,6 +389,7 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                         path: path.into(),
                         pages,
                         layout,
+                        tables: !no_tables,
                     };
                     let mut text = rait_pdf::text(&req)?;
                     let warnings = std::mem::take(&mut text.warnings);
@@ -391,6 +410,31 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                     item(text, truncation, warnings)
                 }),
             )
+        }
+        PdfCommand::Tables { files, pages, full } => {
+            let pages = PageRange::parse(pages.as_deref())?;
+            let records = each(jobs, "pdf.tables", files, |path| {
+                let mut found = rait_pdf::tables(&rait_pdf::TablesRequest {
+                    path: path.into(),
+                    pages,
+                })?;
+                let retry = format!("rait pdf tables {} --pages", quoted(path));
+                let truncation = limit_tables(
+                    &mut found.tables,
+                    |t| t.page,
+                    full,
+                    max_chars,
+                    &retry,
+                    "Page",
+                );
+                item(found, truncation, vec![])
+            });
+            let help = table_help(
+                &records,
+                "Run `rait pdf text <file> --pages <page>` to read a table in context",
+                "No tables found. Detection needs aligned columns; try `rait pdf text <file> --layout`",
+            );
+            Output::new("pdfs", "file", records).help(help)
         }
         PdfCommand::Search {
             files,

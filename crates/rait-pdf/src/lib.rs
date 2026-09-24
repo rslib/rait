@@ -1,6 +1,8 @@
 mod exec;
 mod fallback;
 mod files;
+mod layout;
+mod tables;
 
 pub use exec::ExecError;
 pub use files::{
@@ -90,6 +92,31 @@ pub struct TextRequest {
     pub path: PathBuf,
     pub pages: PageRange,
     pub layout: bool,
+    /// Replace detected tables with Markdown tables. Ignored with `layout`.
+    pub tables: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct TablesRequest {
+    pub path: PathBuf,
+    pub pages: PageRange,
+}
+
+/// A table detected on a page, with rows keyed by its first row.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FoundTable {
+    pub page: u32,
+    /// 1-based position among the tables found in the selected pages.
+    pub table: u32,
+    pub rows: Vec<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PdfTables {
+    /// The requested `--pages` selector, `all` by default.
+    pub range: String,
+    pub total_pages: u32,
+    pub tables: Vec<FoundTable>,
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +160,8 @@ pub struct PdfText {
     /// The requested `--pages` selector, `all` by default.
     pub range: String,
     pub total_pages: u32,
+    /// Tables detected and rendered as Markdown inside the page text.
+    pub tables: u32,
     pub pages: Vec<PageText>,
     #[serde(skip)]
     pub warnings: Vec<String>,
@@ -219,13 +248,23 @@ pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
     let (first, last) = req.pages.bounds(info.pages, "--pages")?;
     let mut warnings = info.warnings;
     let text = extract(&req.path, first, last, req.layout, &mut warnings)?;
-    let pages: Vec<PageText> = (first..=last)
+    let mut pages: Vec<PageText> = (first..=last)
         .zip(text.split_terminator(PAGE_BREAK))
         .map(|(page, text)| PageText {
             page,
             text: text.into(),
         })
         .collect();
+    let mut table_count = 0;
+    if req.tables && !req.layout && !warnings.iter().any(|w| w == FALLBACK_WARNING) {
+        for (page, layout) in pages.iter_mut().zip(bbox(&req.path, first, last)?) {
+            let found = tables::detect(&layout);
+            if !found.is_empty() {
+                table_count += found.len() as u32;
+                page.text = tables::render_page(&layout, &found);
+            }
+        }
+    }
     if pages.iter().all(|page| page.text.trim().is_empty()) {
         warnings.push(
             "No text found. The pages may be scanned images; `rait pdf ocr` adds a text layer."
@@ -235,8 +274,53 @@ pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
     Ok(PdfText {
         range: req.pages.to_string(),
         total_pages: info.pages,
+        tables: table_count,
         pages,
         warnings,
+    })
+}
+
+/// Tables detected from word positions. Needs `pdftotext`; there is no fallback.
+pub fn tables(req: &TablesRequest) -> Result<PdfTables, ErrorInfo> {
+    let info = info(&req.path)?;
+    let (first, last) = req.pages.bounds(info.pages, "--pages")?;
+    let mut found = vec![];
+    for (page, layout) in (first..).zip(bbox(&req.path, first, last)?) {
+        for table in tables::detect(&layout) {
+            found.push(FoundTable {
+                page,
+                table: found.len() as u32 + 1,
+                rows: rait_core::cells::keyed(&table.rows),
+            });
+        }
+    }
+    Ok(PdfTables {
+        range: req.pages.to_string(),
+        total_pages: info.pages,
+        tables: found,
+    })
+}
+
+fn bbox(path: &Path, first: u32, last: u32) -> Result<Vec<layout::Page>, ErrorInfo> {
+    let args: Vec<OsString> = vec![
+        "-bbox-layout".into(),
+        "-enc".into(),
+        "UTF-8".into(),
+        "-f".into(),
+        first.to_string().into(),
+        "-l".into(),
+        last.to_string().into(),
+        path.into(),
+        "-".into(),
+    ];
+    let out = exec::run(PDFTOTEXT, args).map_err(backend_error)?;
+    layout::parse(&String::from_utf8_lossy(&out.stdout)).map_err(|detail| {
+        ErrorInfo::new(
+            ErrorCode::DependencyFailed,
+            "`pdftotext` returned unreadable word positions.",
+            "Run `rait doctor` to check the Poppler install.".to_string(),
+        )
+        .with_detail(detail)
     })
 }
 

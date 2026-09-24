@@ -1,0 +1,137 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multicol}
+
+% Reproducible output: no embedded build date/time or trailer id.
+\pdfinfoomitdate=1
+\pdftrailerid{}
+\pdfsuppressptexinfo=-1
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.6\baselineskip}
+
+\begin{document}
+
+% ---------------------------------------------------------------------
+% Page 1: borderless booktabs table
+% ---------------------------------------------------------------------
+\section*{Quarterly Results}
+
+This report summarizes regional performance for the current fiscal quarter across four operating regions.
+Each region tracks bookings in two consecutive quarters and reports the resulting growth rate.
+The figures below are drawn from the finance team's internal reconciliation process and have been rounded to one decimal place where needed.
+
+\begin{center}
+\begin{tabular}{l r r r}
+\toprule
+Region & Q1 & Q2 & Growth \\
+\midrule
+EU    & 10 & 12 & 20\%   \\
+US    & 7  & 9  & 28.6\% \\
+APAC  & 5  & 6  & 20\%   \\
+LATAM & 3  & 4  & 33.3\% \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Overall bookings grew across every region this quarter, with the strongest relative gains coming from smaller regions off a lower base.
+Management expects the growth rate in EU and APAC to converge with US and LATAM once the new billing pipeline finishes rolling out.
+
+\newpage
+
+% ---------------------------------------------------------------------
+% Page 2: fully ruled table with wrapped description column
+% ---------------------------------------------------------------------
+\section*{Storage Engines}
+
+The following table compares three embeddable storage engines commonly used as the foundation for larger database systems.
+
+\begin{center}
+\begin{tabular}{|l|p{5cm}|r|}
+\hline
+System & Description & Latency (ms) \\
+\hline
+RocksDB & An embeddable persistent key-value store built for fast flash storage and heavy write loads & 1.2 \\
+\hline
+LevelDB & A simple ordered key-value library & 2.5 \\
+\hline
+WiredTiger & A storage engine with document-level concurrency and compression & 1.8 \\
+\hline
+\end{tabular}
+\end{center}
+
+Each engine trades off write amplification, read latency and compression differently, so the right choice depends heavily on the access pattern of the workload sitting on top of it.
+
+\newpage
+
+% ---------------------------------------------------------------------
+% Page 3: two-column prose, no table (false-positive guard)
+% ---------------------------------------------------------------------
+\twocolumn[
+  \section*{Design Notes}
+]
+
+Building a durable storage layer starts with deciding how writes reach stable media before a caller is told the write succeeded.
+Many systems group incoming writes into a sequential log so that a single fsync call can cover a batch of unrelated operations.
+This amortizes the fixed cost of a disk flush across many logical writes and keeps write latency predictable even under bursty load.
+The log itself is treated as the ground truth and every other data structure the engine keeps in memory or on disk exists only to make reads faster.
+
+Once a write is safely recorded in the log, the engine can update its in-memory structures at its own pace.
+A common approach is to buffer recent writes in a sorted in-memory table and only merge them into the larger on-disk structure once that table grows past a size threshold.
+This buffering absorbs bursts of writes without touching the disk on every single operation, and it lets the engine batch the eventual merge into a more efficient sequential write rather than many small random ones scattered across the file.
+
+Reads are the harder problem, because a single key might have been written recently, written long ago or never written at all.
+A read path typically has to check the in-memory buffer first, then walk through progressively older on-disk structures until it either finds the key or exhausts every possible location.
+To avoid wasted work on structures that could not possibly contain the key, many engines keep a small probabilistic filter next to each on-disk structure that can quickly say whether a key is definitely absent, which turns most misses into a single cheap check rather than a full disk read.
+
+Background compaction is what keeps this whole arrangement from degrading over time.
+Without it, the number of on-disk structures a read has to check would grow without bound and both read latency and space usage would climb accordingly.
+A compaction process periodically picks a handful of overlapping structures, merges them into fewer, larger ones and discards any entries that have since been overwritten or deleted.
+Tuning how aggressively compaction runs is one of the central trade-offs in this kind of design.
+Compacting often keeps reads fast and space usage low, but it consumes disk bandwidth and CPU that would otherwise go toward serving incoming traffic, so most production deployments end up choosing a compaction schedule that fits their own ratio of reads to writes rather than adopting a single universal default.
+
+\onecolumn
+\newpage
+
+% ---------------------------------------------------------------------
+% Page 4: spanning header table and a small key/value table
+% ---------------------------------------------------------------------
+\section*{Latency Breakdown}
+
+The table below breaks down latency percentiles by workload type, followed by a small table of the configuration settings used to produce these measurements.
+
+\begin{center}
+\begin{tabular}{l r r r}
+\toprule
+Workload & \multicolumn{2}{c}{Latency (us)} & Ops \\
+\cmidrule(lr){2-3}
+ & p50 & p99 & \\
+\midrule
+read  & 120 & 450  & 1000 \\
+write & 300 & 900  & 800  \\
+scan  & 800 & 2100 & 50   \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+These numbers were collected on a single node with the storage engine configured as shown below, and no other workload running concurrently.
+
+\begin{center}
+\begin{tabular}{l l}
+\toprule
+Setting & Value \\
+\midrule
+Block size   & 4 KiB   \\
+Cache        & 512 MiB \\
+Compression  & LZ4     \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\end{document}

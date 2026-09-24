@@ -1219,8 +1219,10 @@ name = "rait-pdf"
 version = "0.1.0"
 dependencies = [
  "lopdf",
+ "quick-xml 0.42.0",
  "rait-core",
  "serde",
+ "serde_json",
  "thiserror",
 ]
 
