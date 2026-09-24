@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rait", "crates/rait-core", "crates/rait-document", "crates/rait-image", "crates/rait-pdf", "crates/rait-table"]
+members = ["crates/rait", "crates/rait-archive", "crates/rait-core", "crates/rait-document", "crates/rait-image", "crates/rait-pdf", "crates/rait-table"]
 resolver = "3"
 exclude = ["vendor"]
 

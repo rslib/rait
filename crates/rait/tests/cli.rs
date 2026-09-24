@@ -433,7 +433,7 @@ fn claude_installs_write_expected_layouts() {
 #[test]
 fn home_view_lists_pdfs_in_working_directory() {
     let sandbox = Sandbox::new();
-    assert!(stdout(&sandbox.run(&[])).contains("0 PDF, document, table or image files"));
+    assert!(stdout(&sandbox.run(&[])).contains("0 PDF, document, table, image or archive files"));
     std::fs::copy(FIXTURE, sandbox.path().join("a.pdf")).unwrap();
     std::fs::copy(fixture("sample.docx"), sandbox.path().join("b.docx")).unwrap();
     std::fs::copy(fixture("tiny.gif"), sandbox.path().join("c.gif")).unwrap();
@@ -622,4 +622,49 @@ fn image_info_convert_and_ocr() {
         let toon = stdout(&run(&["image", "ocr", &fixture("text.png")]));
         assert!(toon.contains("Invoice 4217"), "{toon}");
     }
+}
+
+fn archive(name: &str) -> String {
+    fixture(&format!("archives/{name}"))
+}
+
+#[test]
+fn archive_list_read_and_extract() {
+    let toon = stdout(&run(&["archive", "list", &archive("sample.tar.gz")]));
+    assert!(toon.contains("entries[6]{path,type,size}:"), "{toon}");
+    assert!(toon.contains("docs/readme.txt,file,33"), "{toon}");
+    let out = run(&[
+        "--format",
+        "json",
+        "archive",
+        "read",
+        &archive("sample.zip"),
+        "docs/readme.txt",
+    ]);
+    assert_eq!(
+        json(&out)[0]["data"]["text"],
+        "RAIT archive fixture\nsecond line\n"
+    );
+    let sandbox = Sandbox::new();
+    let out = sandbox.run(&[
+        "archive",
+        "extract",
+        &archive("evil.tar"),
+        "--output",
+        "out",
+    ]);
+    assert!(out.status.success(), "{}", stdout(&out));
+    let toon = stdout(&out);
+    assert!(toon.contains("skipped[5]{path,reason}:"), "{toon}");
+    assert!(toon.contains("5 entries were skipped for safety"), "{toon}");
+    assert!(!sandbox.path().join("escape.txt").exists());
+    let out = sandbox.run(&[
+        "archive",
+        "extract",
+        &archive("evil.tar"),
+        "--output",
+        "out",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).contains("output_exists"));
 }

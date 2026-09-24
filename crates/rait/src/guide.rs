@@ -1,7 +1,7 @@
 pub const DESCRIPTION: &str =
-    "Read and transform local PDFs, documents, tables and images for coding agents";
+    "Read and transform local PDFs, documents, tables, images and archives for coding agents";
 
-pub const SKILL_DESCRIPTION: &str = "Read, search and transform local PDF, DOCX, PPTX, EPUB and HTML files and preview CSV, Excel, ODS and Parquet tables, and inspect, shrink and OCR images with RAIT. Use when reading, summarizing, searching or transforming PDFs, office documents, data files or images from an agent.";
+pub const SKILL_DESCRIPTION: &str = "Read, search and transform local PDF, DOCX, PPTX, EPUB and HTML files and preview CSV, Excel, ODS and Parquet tables, inspect, shrink and OCR images, and list, read and safely extract archives with RAIT. Use when reading, summarizing, searching or transforming PDFs, office documents, data files, images or archives from an agent.";
 
 /// Usage guidance shared by the home view and the generated PDF skill.
 pub const GUIDE: &[&str] = &[
@@ -15,6 +15,7 @@ pub const GUIDE: &[&str] = &[
     "Run `rait doc text <file>... [--parts <range>]` to read DOCX, PPTX, EPUB or HTML as Markdown with tables; parts are sections, slides or chapters",
     "Run `rait table info|schema|rows <file>` to preview CSV, TSV, Excel, ODS or Parquet; rows come as a table, 20 by default, more with --rows <range> and --columns <names>",
     "Run `rait image info <file>...` for size and format, `rait image convert <file>... --output <dir> --max <px>` to shrink or convert (EXIF rotation applied), and `rait image ocr <file>` to read text in an image",
+    "Run `rait archive list <file>` and `rait archive read <file> <entry>` to look inside zip, 7z, ar and tar archives without extracting; `rait archive extract <file> --output <dir>` skips unsafe paths and links",
     "Run `rait doctor` after a dependency_missing error",
     "Add --format json when a script parses the output",
     "Run `rait <command> --help` for flags and examples",

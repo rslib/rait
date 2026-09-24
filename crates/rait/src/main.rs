@@ -66,6 +66,11 @@ enum Commands {
         #[command(subcommand)]
         command: ImageCommand,
     },
+    /// List, read and safely extract zip, 7z, ar and tar archives
+    Archive {
+        #[command(subcommand)]
+        command: ArchiveCommand,
+    },
     /// List, show and install the embedded agent skills
     Skills {
         #[command(subcommand)]
@@ -227,6 +232,51 @@ enum DocCommand {
         /// Do not apply --max-chars
         #[arg(long)]
         full: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArchiveCommand {
+    /// Entries as a table with totals, the first 200 by default
+    #[command(
+        after_help = "Examples:\n  rait archive list release.tar.gz\n  rait archive list big.zip --entries 201-400"
+    )]
+    List {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Entries, a number like 4 or a closed range like 201-400
+        #[arg(long)]
+        entries: Option<String>,
+    },
+    /// Print one file entry as text, without extracting
+    #[command(
+        after_help = "Examples:\n  rait archive read project.zip project/README.md\n  rait archive read logs.tar.zst var/log/app.log --full"
+    )]
+    Read {
+        file: PathBuf,
+        entry: String,
+        /// Do not apply --max-chars
+        #[arg(long)]
+        full: bool,
+    },
+    /// Extract into --output. Paths that leave the output directory, links and
+    /// special files are skipped and reported
+    #[command(
+        after_help = "Examples:\n  rait archive extract release.tar.gz --output src\n  rait archive extract data.zip --output out --only data/2026"
+    )]
+    Extract {
+        file: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        /// Entry paths or directories to extract; all by default
+        #[arg(long, value_delimiter = ',')]
+        only: Vec<String>,
+        /// Refuse archives whose files add up to more than this many bytes
+        #[arg(long, default_value_t = 10 * 1024 * 1024 * 1024)]
+        max_bytes: u64,
+        /// Replace existing files
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -430,6 +480,7 @@ fn run(cli: Cli) -> Result<Option<Output>, ErrorInfo> {
         Commands::Doc { command } => run_doc(command, jobs, max_chars).map(Some),
         Commands::Table { command } => run_table(command, jobs, max_chars).map(Some),
         Commands::Image { command } => run_image(command, jobs, max_chars).map(Some),
+        Commands::Archive { command } => run_archive(command, jobs, max_chars).map(Some),
         Commands::Skills { command } => run_skills(command, cli.format),
     }
 }
@@ -655,6 +706,96 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
         }
     };
     Ok(output)
+}
+
+fn run_archive(
+    command: ArchiveCommand,
+    jobs: usize,
+    max_chars: usize,
+) -> Result<Output, ErrorInfo> {
+    Ok(match command {
+        ArchiveCommand::List { files, entries } => {
+            let range = entries
+                .as_deref()
+                .map(|r| PageRange::parse(Some(r)))
+                .transpose()?;
+            let records = each(jobs, "archive.list", files, |path| {
+                to_value(rait_archive::list(&rait_archive::ListRequest {
+                    path: path.into(),
+                    entries: range,
+                })?)
+            });
+            let more = records.iter().find_map(|record| {
+                let data = record.data.as_ref()?;
+                let shown = first_row(data["range"].as_str()?) + data["entries"].as_array()?.len() as u64;
+                let total = data["total_entries"].as_u64()?;
+                (shown <= total).then(|| {
+                    format!(
+                        "Run `rait archive list {} --entries {shown}-{}` for more of the {total} entries",
+                        shell_quote(&record.input),
+                        total.min(shown + 199)
+                    )
+                })
+            });
+            Output::new("archives", "file", records).help(more.into_iter().chain([
+                "Run `rait archive read <file> <entry>` to print a file entry".to_string(),
+                "Run `rait archive extract <file> --output <dir>` to extract safely".to_string(),
+            ]))
+        }
+        ArchiveCommand::Read { file, entry, full } => {
+            let input = protocol_or_display(&file);
+            Output::new(
+                "entries",
+                "file",
+                vec![record(0, "archive.read", input, || {
+                    let mut text = rait_archive::read(&file, &entry)?;
+                    let mut truncation = None;
+                    if !full {
+                        let (limited, cut) = limit_text(std::mem::take(&mut text.text), max_chars);
+                        text.text = limited;
+                        truncation = cut.map(|mut cut| {
+                            cut.hint = format!(
+                                "Run `rait archive read {} {} --full` for all {} chars",
+                                quoted(&file),
+                                shell_quote(&entry),
+                                cut.total_chars
+                            );
+                            cut
+                        });
+                    }
+                    item(text, truncation, vec![])
+                })],
+            )
+        }
+        ArchiveCommand::Extract {
+            file,
+            output,
+            only,
+            max_bytes,
+            force,
+        } => {
+            let input = protocol_or_display(&file);
+            let record = record(0, "archive.extract", input, || {
+                let done = rait_archive::extract(&rait_archive::ExtractRequest {
+                    path: file.clone(),
+                    output_dir: output.clone(),
+                    only: only.clone(),
+                    max_bytes,
+                    force,
+                })?;
+                let warnings = if done.skipped.is_empty() {
+                    vec![]
+                } else {
+                    vec![format!(
+                        "{} entries were skipped for safety; see `skipped`.",
+                        done.skipped.len()
+                    )]
+                };
+                item(done, None, warnings)
+            });
+            Output::new("extracted", "file", vec![record])
+        }
+    })
 }
 
 fn run_image(command: ImageCommand, jobs: usize, max_chars: usize) -> Result<Output, ErrorInfo> {
@@ -1201,13 +1342,13 @@ fn home() -> Value {
     if files.is_empty() {
         doc.insert(
             "files".into(),
-            json!("0 PDF, document, table or image files in the current directory"),
+            json!("0 PDF, document, table, image or archive files in the current directory"),
         );
     } else {
         doc.insert(
             "count".into(),
             json!(format!(
-                "{} of {} PDF, document, table and image files in the current directory",
+                "{} of {} PDF, document, table, image and archive files in the current directory",
                 files.len().min(HOME_FILE_LIMIT),
                 files.len()
             )),
@@ -1232,6 +1373,10 @@ fn is_supported(name: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
         || rait_document::Format::from_path(path).is_some()
         || rait_table::Format::from_path(path).is_some()
+        || path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| rait_archive::EXTENSIONS.contains(&ext.to_lowercase().as_str()))
         || path
             .extension()
             .and_then(|ext| ext.to_str())

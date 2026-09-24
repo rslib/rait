@@ -1,0 +1,21 @@
+[package]
+name = "rait-archive"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+ar = "0.9"
+bzip2 = "0.6"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+lzma-rust2 = { version = "0.21", default-features = false, features = ["std", "xz"] }
+rait-core = { path = "../rait-core" }
+serde.workspace = true
+sevenz-rust2 = { version = "0.23", default-features = false, features = ["bzip2", "deflate", "zstd"] }
+tar = { version = "0.4", default-features = false }
+zip = { version = "8.6", default-features = false, features = ["bzip2", "deflate-flate2-zlib-rs", "deflate64", "lzma", "xz", "zstd"] }
+zstd = { version = "0.14", default-features = false }
+
+[dev-dependencies]
+tempfile.workspace = true
