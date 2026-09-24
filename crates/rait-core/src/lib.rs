@@ -1,3 +1,4 @@
+pub mod cells;
 mod range;
 
 pub use range::PageRange;

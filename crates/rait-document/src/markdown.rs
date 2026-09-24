@@ -1,3 +1,5 @@
+use rait_core::cells::markdown_table;
+
 /// Document structure that survives extraction, rendered as GitHub-flavoured Markdown.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Block {
@@ -43,7 +45,7 @@ pub fn render(blocks: &[Block]) -> String {
                 out.push_str(if *ordered { "1. " } else { "- " });
                 out.push_str(&one_line(text));
             }
-            Block::Table(rows) => out.push_str(&table(rows)),
+            Block::Table(rows) => out.push_str(&markdown_table(rows)),
             Block::Code(text) => {
                 out.push_str("```\n");
                 out.push_str(text.trim_end_matches('\n'));
@@ -94,30 +96,6 @@ pub fn push(blocks: &mut Vec<Block>, block: Block) {
     if !empty {
         blocks.push(block);
     }
-}
-
-fn table(rows: &[Vec<String>]) -> String {
-    let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-    let line = |row: &[String]| {
-        let cells: Vec<String> = (0..width)
-            .map(|i| row.get(i).map_or(String::new(), |cell| cell_text(cell)))
-            .collect();
-        format!("| {} |", cells.join(" | "))
-    };
-    let mut lines = vec![line(&rows[0])];
-    lines.push(format!("|{}", " --- |".repeat(width)));
-    lines.extend(rows[1..].iter().map(|row| line(row)));
-    lines.join("\n")
-}
-
-fn cell_text(cell: &str) -> String {
-    cell.trim()
-        .replace('|', "\\|")
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("<br>")
 }
 
 fn one_line(text: &str) -> String {
