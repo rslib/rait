@@ -77,12 +77,99 @@ pub fn emit_usage_error(format: Format, err: ErrorInfo) -> ExitCode {
 pub fn print_value(format: Format, value: &Value) {
     let text = match format {
         Format::Json => serde_json::to_string(value).map_err(|err| err.to_string()),
-        _ => toon_format::encode_default(value).map_err(|err| err.to_string()),
+        _ => toon_format::encode_default(value)
+            .map(|toon| expand_lists(&toon))
+            .map_err(|err| err.to_string()),
     };
     match text {
         Ok(text) => write_stdout(&format!("{text}\n")),
         Err(err) => write_stdout(&format!("error: output serialization failed: {err}\n")),
     }
+}
+
+/// Rewrite inline lists of plain values (`key[N]: a,b`) one item per line, as
+/// AXI tools print them. Items stay unquoted unless quoting keeps them intact.
+fn expand_lists(toon: &str) -> String {
+    let mut out = String::with_capacity(toon.len());
+    for line in toon.lines() {
+        match inline_list(line) {
+            Some((head, indent, items)) => {
+                out.push_str(head);
+                out.push_str(":\n");
+                for item in items {
+                    out.push_str(&" ".repeat(indent));
+                    out.push_str(&item);
+                    out.push('\n');
+                }
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out.pop();
+    out
+}
+
+/// Split `key[N]: a,"b, c"` into `key[N]`, the item indent and the items.
+fn inline_list(line: &str) -> Option<(&str, usize, Vec<String>)> {
+    let body = line.trim_start();
+    let mut indent = line.len() - body.len();
+    let key = match body.strip_prefix("- ") {
+        Some(rest) => {
+            indent += 2;
+            rest
+        }
+        None => body,
+    };
+    let open = key.find('[')?;
+    let close = open + key[open..].find("]: ")?;
+    let count = &key[open + 1..close];
+    if open == 0 || key[..open].starts_with('"') || !count.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let head_len = line.len() - key.len() + close + 1;
+    let values = &key[close + 3..];
+    Some((&line[..head_len], indent + 2, split_values(values)))
+}
+
+fn split_values(values: &str) -> Vec<String> {
+    let mut items = vec![];
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for c in values.chars() {
+        match c {
+            _ if escaped => {
+                current.push(c);
+                escaped = false;
+            }
+            '\\' if quoted => {
+                current.push(c);
+                escaped = true;
+            }
+            '"' => {
+                current.push(c);
+                quoted = !quoted;
+            }
+            ',' if !quoted => items.push(std::mem::take(&mut current)),
+            _ => current.push(c),
+        }
+    }
+    items.push(current);
+    items.into_iter().map(|item| unquote(&item)).collect()
+}
+
+/// Drop TOON quotes when the plain text reads the same on its own line.
+fn unquote(item: &str) -> String {
+    let Some(inner) = item.strip_prefix('"').and_then(|i| i.strip_suffix('"')) else {
+        return item.to_string();
+    };
+    if inner.is_empty() || inner.contains("\\n") || inner.trim() != inner {
+        return item.to_string();
+    }
+    inner.replace("\\\"", "\"").replace("\\\\", "\\")
 }
 
 fn toon(output: Output) -> Value {
@@ -219,4 +306,18 @@ fn print_text(record: &Record) {
         (None, None) => return,
     };
     write_stdout(&line);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expands_inline_lists_one_item_per_line() {
+        let toon = "count: 1\nhelp[2]: Run `a`,\"Run `b \\\"q\\\"`, then c\"\nrows[1]{a,b}:\n  1,2\n  - tags[2]: x,\" y\"\nempty[0]:";
+        assert_eq!(
+            expand_lists(toon),
+            "count: 1\nhelp[2]:\n  Run `a`\n  Run `b \"q\"`, then c\nrows[1]{a,b}:\n  1,2\n  - tags[2]:\n      x\n      \" y\"\nempty[0]:"
+        );
+    }
 }

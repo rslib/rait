@@ -438,7 +438,7 @@ fn home_view_lists_pdfs_in_working_directory() {
     std::fs::copy(fixture("sample.docx"), sandbox.path().join("b.docx")).unwrap();
     std::fs::copy(fixture("tiny.gif"), sandbox.path().join("c.gif")).unwrap();
     std::fs::write(sandbox.path().join("d.txt"), "x").unwrap();
-    assert!(stdout(&sandbox.run(&[])).contains("files[3]: a.pdf,b.docx,c.gif"));
+    assert!(stdout(&sandbox.run(&[])).contains("files[3]:\n  a.pdf\n  b.docx\n  c.gif"));
 }
 
 #[test]

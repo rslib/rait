@@ -25,7 +25,9 @@ Expected output:
 count: 1
 pdfs[1]{file,pages,title,encrypted}:
   tests/fixtures/simple.pdf,1,null,false
-help[2]: ...
+help[2]:
+  Run `rait pdf text <file> --pages <range>` to read text
+  Run `rait pdf search <file>... "<query>"` to find lines
 ```
 
 `pdf text` detects tables from word positions and writes them as Markdown tables. `rait pdf tables` and `rait doc tables` return tables as rows keyed by their header:
