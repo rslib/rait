@@ -1,11 +1,11 @@
 ---
 name: rait
-description: Read, search and transform local PDF, DOCX, PPTX, EPUB and HTML files and preview CSV, Excel, ODS and Parquet tables with RAIT. Use when reading, summarizing, searching or transforming PDFs, office documents or data files from an agent.
+description: Read, search and transform local PDF, DOCX, PPTX, EPUB and HTML files and preview CSV, Excel, ODS and Parquet tables, and inspect, shrink and OCR images with RAIT. Use when reading, summarizing, searching or transforming PDFs, office documents, data files or images from an agent.
 ---
 
 # RAIT
 
-Read and transform local PDFs, documents and tables for coding agents. Output is TOON by default.
+Read and transform local PDFs, documents, tables and images for coding agents. Output is TOON by default.
 
 - Run `rait pdf info <file>...` for page counts and titles.
 - Run `rait pdf text <file> --pages <range>` to read text; detected tables appear as Markdown tables, narrow --pages or lower --max-chars to save context.
@@ -16,6 +16,7 @@ Read and transform local PDFs, documents and tables for coding agents. Output is
 - Run `rait pdf ocr <file> --output <dir>` only when `rait pdf text` finds no usable text.
 - Run `rait doc text <file>... [--parts <range>]` to read DOCX, PPTX, EPUB or HTML as Markdown with tables; parts are sections, slides or chapters.
 - Run `rait table info|schema|rows <file>` to preview CSV, TSV, Excel, ODS or Parquet; rows come as a table, 20 by default, more with --rows <range> and --columns <names>.
+- Run `rait image info <file>...` for size and format, `rait image convert <file>... --output <dir> --max <px>` to shrink or convert (EXIF rotation applied), and `rait image ocr <file>` to read text in an image.
 - Run `rait doctor` after a dependency_missing error.
 - Add --format json when a script parses the output.
 - Run `rait <command> --help` for flags and examples.

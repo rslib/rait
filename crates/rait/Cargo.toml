@@ -9,6 +9,7 @@ license.workspace = true
 clap.workspace = true
 rait-core = { path = "../rait-core" }
 rait-document = { path = "../rait-document" }
+rait-image = { path = "../rait-image" }
 rait-pdf = { path = "../rait-pdf" }
 rait-table = { path = "../rait-table" }
 serde.workspace = true

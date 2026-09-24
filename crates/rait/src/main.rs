@@ -5,7 +5,8 @@ use clap::error::{ContextKind, ContextValue, ErrorKind as ClapErrorKind};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use guide::{DESCRIPTION, GUIDE};
 use rait_core::{
-    ErrorCode, ErrorInfo, Record, Truncation, limit_chunks, path_to_protocol, run_ordered,
+    ErrorCode, ErrorInfo, Record, Truncation, limit_chunks, limit_text, path_to_protocol,
+    run_ordered,
 };
 use rait_pdf::{
     DEPENDENCIES, ImageFormat, MergeRequest, OcrRequest, PageRange, PageText, RenderRequest,
@@ -59,6 +60,11 @@ enum Commands {
     Table {
         #[command(subcommand)]
         command: TableCommand,
+    },
+    /// Inspect, convert, shrink and OCR images
+    Image {
+        #[command(subcommand)]
+        command: ImageCommand,
     },
     /// List, show and install the embedded agent skills
     Skills {
@@ -225,6 +231,76 @@ enum DocCommand {
 }
 
 #[derive(Subcommand)]
+enum ImageCommand {
+    /// Format and displayed size. More with --fields
+    #[command(
+        after_help = "Examples:\n  rait image info photo.jpg\n  rait image info *.png --fields color,taken,camera"
+    )]
+    Info {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Extra TOON columns. JSON always has every field
+        #[arg(long, value_enum, value_delimiter = ',')]
+        fields: Vec<ImageField>,
+    },
+    /// Convert and optionally shrink, applying the EXIF rotation. Writes
+    /// <stem>.<ext> into --output
+    #[command(
+        after_help = "Examples:\n  rait image convert photo.jpg --output out --to png\n  rait image convert *.jpg --output small --max 1568"
+    )]
+    Convert {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+        /// Output format; the source format by default
+        #[arg(long, value_enum)]
+        to: Option<ImageTo>,
+        /// Shrink so the longer side is at most this many pixels
+        #[arg(long)]
+        max: Option<u32>,
+        /// JPEG quality, 1 to 100
+        #[arg(long, default_value_t = 85)]
+        quality: u8,
+        /// Replace existing output files
+        #[arg(long)]
+        force: bool,
+    },
+    /// Text in the image, read with Tesseract
+    #[command(
+        after_help = "Examples:\n  rait image ocr scan.png\n  rait image ocr receipt.jpg --lang eng+deu"
+    )]
+    Ocr {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Tesseract language codes
+        #[arg(long, default_value = "eng")]
+        lang: String,
+        /// Do not apply --max-chars
+        #[arg(long)]
+        full: bool,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum ImageField {
+    Color,
+    Orientation,
+    Taken,
+    Camera,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ImageTo {
+    Png,
+    Jpeg,
+    Webp,
+    Gif,
+    Bmp,
+    Tiff,
+}
+
+#[derive(Subcommand)]
 enum TableCommand {
     /// Sheets with their row and column counts
     #[command(
@@ -353,6 +429,7 @@ fn run(cli: Cli) -> Result<Option<Output>, ErrorInfo> {
         Commands::Pdf { command } => run_pdf(command, jobs, max_chars).map(Some),
         Commands::Doc { command } => run_doc(command, jobs, max_chars).map(Some),
         Commands::Table { command } => run_table(command, jobs, max_chars).map(Some),
+        Commands::Image { command } => run_image(command, jobs, max_chars).map(Some),
         Commands::Skills { command } => run_skills(command, cli.format),
     }
 }
@@ -578,6 +655,99 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
         }
     };
     Ok(output)
+}
+
+fn run_image(command: ImageCommand, jobs: usize, max_chars: usize) -> Result<Output, ErrorInfo> {
+    Ok(match command {
+        ImageCommand::Info { files, fields } => Output::new(
+            "images",
+            "file",
+            each(jobs, "image.info", files, |path| {
+                to_value(rait_image::info(path)?)
+            }),
+        )
+        .shape(move |data| {
+            let mut row = Map::new();
+            for key in ["format", "width", "height"] {
+                row.insert(key.into(), data[key].clone());
+            }
+            for (field, key) in [
+                (ImageField::Color, "color"),
+                (ImageField::Orientation, "orientation"),
+                (ImageField::Taken, "taken"),
+                (ImageField::Camera, "camera"),
+            ] {
+                if fields.contains(&field) {
+                    row.insert(key.into(), data[key].clone());
+                }
+            }
+            Value::Object(row)
+        })
+        .help([
+            "Run `rait image convert <file>... --output <dir> --max <px>` to shrink images",
+            "Run `rait image ocr <file>` to read text in an image",
+        ]),
+        ImageCommand::Convert {
+            files,
+            output,
+            to,
+            max,
+            quality,
+            force,
+        } => {
+            unique_stems(&files)?;
+            let to = to.map(|to| match to {
+                ImageTo::Png => rait_image::Target::Png,
+                ImageTo::Jpeg => rait_image::Target::Jpeg,
+                ImageTo::Webp => rait_image::Target::Webp,
+                ImageTo::Gif => rait_image::Target::Gif,
+                ImageTo::Bmp => rait_image::Target::Bmp,
+                ImageTo::Tiff => rait_image::Target::Tiff,
+            });
+            Output::new(
+                "converted",
+                "file",
+                each(jobs, "image.convert", files, |path| {
+                    to_value(rait_image::convert(&rait_image::ConvertRequest {
+                        path: path.into(),
+                        output_dir: output.clone(),
+                        to,
+                        max,
+                        quality,
+                        force,
+                    })?)
+                }),
+            )
+        }
+        ImageCommand::Ocr { files, lang, full } => Output::new(
+            "texts",
+            "file",
+            each(jobs, "image.ocr", files, |path| {
+                let mut text = rait_image::ocr(&rait_image::OcrRequest {
+                    path: path.into(),
+                    lang: lang.clone(),
+                })?;
+                let mut warnings = vec![];
+                if text.text.trim().is_empty() {
+                    warnings.push("No text found in the image.".to_string());
+                }
+                let mut truncation = None;
+                if !full {
+                    let (limited, cut) = limit_text(std::mem::take(&mut text.text), max_chars);
+                    text.text = limited;
+                    truncation = cut.map(|mut cut| {
+                        cut.hint = format!(
+                            "Run `rait image ocr {} --full` for all {} chars",
+                            quoted(path),
+                            cut.total_chars
+                        );
+                        cut
+                    });
+                }
+                item(text, truncation, warnings)
+            }),
+        ),
+    })
 }
 
 fn run_table(command: TableCommand, jobs: usize, max_chars: usize) -> Result<Output, ErrorInfo> {
@@ -966,6 +1136,7 @@ fn doctor() -> Output {
     let mut help = vec![];
     let records = DEPENDENCIES
         .iter()
+        .chain(rait_image::DEPENDENCIES)
         .enumerate()
         .map(|(id, dep)| {
             let (available, version) = match dep.probe() {
@@ -1003,6 +1174,7 @@ fn home() -> Value {
         .unwrap_or_else(|_| "rait".into());
     let missing: Vec<&str> = DEPENDENCIES
         .iter()
+        .chain(rait_image::DEPENDENCIES)
         .filter(|dep| dep.probe().is_err())
         .map(|dep| dep.program)
         .collect();
@@ -1029,13 +1201,13 @@ fn home() -> Value {
     if files.is_empty() {
         doc.insert(
             "files".into(),
-            json!("0 PDF or document files in the current directory"),
+            json!("0 PDF, document, table or image files in the current directory"),
         );
     } else {
         doc.insert(
             "count".into(),
             json!(format!(
-                "{} of {} PDF and document files in the current directory",
+                "{} of {} PDF, document, table and image files in the current directory",
                 files.len().min(HOME_FILE_LIMIT),
                 files.len()
             )),
@@ -1060,6 +1232,10 @@ fn is_supported(name: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
         || rait_document::Format::from_path(path).is_some()
         || rait_table::Format::from_path(path).is_some()
+        || path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| rait_image::EXTENSIONS.contains(&ext.to_lowercase().as_str()))
 }
 
 fn tilde(path: &Path) -> String {

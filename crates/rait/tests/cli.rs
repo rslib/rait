@@ -303,7 +303,7 @@ fn doctor_reports_missing_programs_without_failing() {
         assert_eq!(record["data"]["available"], false);
     }
     let toon = stdout(&without_programs(&["doctor"]));
-    assert!(toon.contains("programs[5]{program,available,version,used_by}:"));
+    assert!(toon.contains("programs[6]{program,available,version,used_by}:"));
     assert!(toon.contains("Install pdfinfo (built-in reader used meanwhile)"));
 }
 
@@ -433,11 +433,12 @@ fn claude_installs_write_expected_layouts() {
 #[test]
 fn home_view_lists_pdfs_in_working_directory() {
     let sandbox = Sandbox::new();
-    assert!(stdout(&sandbox.run(&[])).contains("0 PDF or document files"));
+    assert!(stdout(&sandbox.run(&[])).contains("0 PDF, document, table or image files"));
     std::fs::copy(FIXTURE, sandbox.path().join("a.pdf")).unwrap();
     std::fs::copy(fixture("sample.docx"), sandbox.path().join("b.docx")).unwrap();
-    std::fs::write(sandbox.path().join("c.txt"), "x").unwrap();
-    assert!(stdout(&sandbox.run(&[])).contains("files[2]: a.pdf,b.docx"));
+    std::fs::copy(fixture("tiny.gif"), sandbox.path().join("c.gif")).unwrap();
+    std::fs::write(sandbox.path().join("d.txt"), "x").unwrap();
+    assert!(stdout(&sandbox.run(&[])).contains("files[3]: a.pdf,b.docx,c.gif"));
 }
 
 #[test]
@@ -580,4 +581,45 @@ fn pdf_text_reports_inline_tables() {
         "--no-tables",
     ]);
     assert_eq!(json(&out)[0]["data"]["tables"], 0);
+}
+
+#[test]
+fn image_info_convert_and_ocr() {
+    let toon = stdout(&run(&[
+        "image",
+        "info",
+        &fixture("photo.jpg"),
+        "--fields",
+        "orientation,camera",
+    ]));
+    assert!(
+        toon.contains("images[1]{file,format,width,height,orientation,camera}:"),
+        "{toon}"
+    );
+    assert!(toon.contains(",jpeg,40,60,6,RAIT Fixture Cam"), "{toon}");
+    let sandbox = Sandbox::new();
+    let out = sandbox.run(&[
+        "--format",
+        "json",
+        "image",
+        "convert",
+        &fixture("photo.jpg"),
+        "--output",
+        "out",
+        "--to",
+        "png",
+        "--max",
+        "30",
+    ]);
+    assert!(out.status.success(), "{}", stdout(&out));
+    let data = &json(&out)[0]["data"];
+    assert_eq!(
+        (data["width"].as_u64(), data["height"].as_u64()),
+        (Some(20), Some(30))
+    );
+    assert!(sandbox.path().join("out/photo.png").exists());
+    if has("tesseract") {
+        let toon = stdout(&run(&["image", "ocr", &fixture("text.png")]));
+        assert!(toon.contains("Invoice 4217"), "{toon}");
+    }
 }
