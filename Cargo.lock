@@ -1209,6 +1209,7 @@ dependencies = [
  "rait-core",
  "scraper",
  "serde",
+ "serde_json",
  "tempfile",
  "zip",
 ]

@@ -10,6 +10,7 @@ quick-xml = "0.42"
 rait-core = { path = "../rait-core" }
 scraper = "0.27"
 serde.workspace = true
+serde_json.workspace = true
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]

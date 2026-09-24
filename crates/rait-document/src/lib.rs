@@ -8,6 +8,7 @@ mod xml;
 use markdown::{Block, render, split_at_h1};
 use rait_core::{ErrorCode, ErrorInfo, PageRange, check_input};
 use serde::Serialize;
+use serde_json::{Map, Value};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -74,25 +75,34 @@ pub struct DocText {
     pub warnings: Vec<String>,
 }
 
+/// A table found in a document, with rows keyed by its first row.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct FoundTable {
+    pub part: u32,
+    /// 1-based position among all tables in the document.
+    pub table: u32,
+    pub rows: Vec<Map<String, Value>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct DocTables {
+    pub format: Format,
+    /// The requested `--parts` selector, `all` by default.
+    pub range: String,
+    pub total_parts: u32,
+    pub tables: Vec<FoundTable>,
+}
+
 pub fn text(req: &TextRequest) -> Result<DocText, ErrorInfo> {
-    check_input(&req.path)?;
-    let format = Format::from_path(&req.path).ok_or_else(|| unsupported(&req.path))?;
-    let all = parts(&req.path, format).map_err(|detail| {
-        ErrorInfo::new(
-            ErrorCode::InvalidInput,
-            format!(
-                "The file is not a valid {}, or it is encrypted or damaged.",
-                format.name()
-            ),
-            "Check the file, or open and re-save it.".to_string(),
-        )
-        .with_detail(detail)
-    })?;
+    let (format, all) = load(&req.path)?;
     let total = all.len() as u32;
     let (first, last) = req.parts.bounds(total, "--parts")?;
     let parts: Vec<Part> = (first..=last)
-        .zip(all.into_iter().skip(first as usize - 1))
-        .map(|(part, text)| Part { part, text })
+        .zip(all.iter().skip(first as usize - 1))
+        .map(|(part, blocks)| Part {
+            part,
+            text: render(blocks),
+        })
         .collect();
     let mut warnings = vec![];
     if parts.iter().all(|part| part.text.trim().is_empty()) {
@@ -107,12 +117,57 @@ pub fn text(req: &TextRequest) -> Result<DocText, ErrorInfo> {
     })
 }
 
-fn parts(path: &Path, format: Format) -> Result<Vec<String>, String> {
-    let rendered = |parts: Vec<Vec<Block>>| parts.iter().map(|part| render(part)).collect();
+/// Tables in the selected parts. Same request as [`text`].
+pub fn tables(req: &TextRequest) -> Result<DocTables, ErrorInfo> {
+    let (format, all) = load(&req.path)?;
+    let total = all.len() as u32;
+    let (first, last) = req.parts.bounds(total, "--parts")?;
+    let mut tables = vec![];
+    let mut index = 0;
+    for (part, blocks) in (1..).zip(&all) {
+        for block in blocks {
+            if let Block::Table(rows) = block {
+                index += 1;
+                if (first..=last).contains(&part) {
+                    tables.push(FoundTable {
+                        part,
+                        table: index,
+                        rows: rait_core::cells::keyed(rows),
+                    });
+                }
+            }
+        }
+    }
+    Ok(DocTables {
+        format,
+        range: req.parts.to_string(),
+        total_parts: total,
+        tables,
+    })
+}
+
+fn load(path: &Path) -> Result<(Format, Vec<Vec<Block>>), ErrorInfo> {
+    check_input(path)?;
+    let format = Format::from_path(path).ok_or_else(|| unsupported(path))?;
+    let parts = parts(path, format).map_err(|detail| {
+        ErrorInfo::new(
+            ErrorCode::InvalidInput,
+            format!(
+                "The file is not a valid {}, or it is encrypted or damaged.",
+                format.name()
+            ),
+            "Check the file, or open and re-save it.".to_string(),
+        )
+        .with_detail(detail)
+    })?;
+    Ok((format, parts))
+}
+
+fn parts(path: &Path, format: Format) -> Result<Vec<Vec<Block>>, String> {
     match format {
         Format::Html => {
             let html = read_limited(File::open(path).map_err(|err| err.to_string())?)?;
-            Ok(rendered(split_at_h1(html::blocks(&html))))
+            Ok(split_at_h1(html::blocks(&html)))
         }
         Format::Docx => {
             let mut zip = open_zip(path)?;
@@ -120,7 +175,7 @@ fn parts(path: &Path, format: Format) -> Result<Vec<String>, String> {
             let styles = entry(&mut zip, "word/styles.xml").ok();
             let numbering = entry(&mut zip, "word/numbering.xml").ok();
             let blocks = docx::blocks(&document, styles.as_deref(), numbering.as_deref())?;
-            Ok(rendered(split_at_h1(blocks)))
+            Ok(split_at_h1(blocks))
         }
         Format::Pptx => {
             let mut zip = open_zip(path)?;
@@ -128,7 +183,7 @@ fn parts(path: &Path, format: Format) -> Result<Vec<String>, String> {
             let rels = entry(&mut zip, "ppt/_rels/presentation.xml.rels")?;
             let mut slides = vec![];
             for slide in pptx::slide_paths(&presentation, &rels)? {
-                slides.push(render(&pptx::slide_blocks(&entry(&mut zip, &slide)?)?));
+                slides.push(pptx::slide_blocks(&entry(&mut zip, &slide)?)?);
             }
             Ok(slides)
         }
@@ -138,9 +193,9 @@ fn parts(path: &Path, format: Format) -> Result<Vec<String>, String> {
             let opf = entry(&mut zip, &opf_path)?;
             let mut chapters = vec![];
             for doc in epub::spine(&opf, &opf_path)? {
-                let text = render(&html::blocks(&entry(&mut zip, &doc)?));
-                if !text.is_empty() {
-                    chapters.push(text);
+                let blocks = html::blocks(&entry(&mut zip, &doc)?);
+                if !blocks.is_empty() {
+                    chapters.push(blocks);
                 }
             }
             Ok(chapters)

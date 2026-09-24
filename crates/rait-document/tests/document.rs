@@ -121,3 +121,36 @@ fn bad_inputs_are_typed_errors() {
     .unwrap_err();
     assert_eq!(err.code, ErrorCode::FileNotFound);
 }
+
+#[test]
+fn tables_are_keyed_by_their_header() {
+    let got = rait_document::tables(&TextRequest {
+        path: fixture("edge.docx"),
+        parts: PageRange::All,
+    })
+    .unwrap();
+    assert_eq!(got.tables.len(), 1);
+    let table = &got.tables[0];
+    assert_eq!((table.part, table.table), (2, 1));
+    assert_eq!(
+        serde_json::Value::Object(table.rows[0].clone()),
+        serde_json::json!({"Region": "APAC", "Q1": 5, "Q2": 6})
+    );
+    assert_eq!(table.rows[1]["Region"], serde_json::Value::Null);
+    for name in ["sample.docx", "sample.pptx", "sample.epub", "sample.html"] {
+        let got = rait_document::tables(&TextRequest {
+            path: fixture(name),
+            parts: PageRange::All,
+        })
+        .unwrap();
+        assert_eq!(got.tables.len(), 1, "{name}");
+        assert_eq!(got.tables[0].rows[0]["Region"], "EU", "{name}");
+        assert_eq!(got.tables[0].rows[1]["Q2"], 9, "{name}");
+    }
+    let none = rait_document::tables(&TextRequest {
+        path: fixture("sample.docx"),
+        parts: PageRange::Single(1),
+    })
+    .unwrap();
+    assert!(none.tables.is_empty());
+}

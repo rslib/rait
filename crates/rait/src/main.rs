@@ -176,6 +176,20 @@ enum PdfCommand {
 
 #[derive(Subcommand)]
 enum DocCommand {
+    /// Tables as rows keyed by their header
+    #[command(
+        after_help = "Examples:\n  rait doc tables report.docx\n  rait doc tables deck.pptx --parts 3"
+    )]
+    Tables {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// A part like 4 or a closed range like 2-7
+        #[arg(long)]
+        parts: Option<String>,
+        /// Do not apply --max-chars
+        #[arg(long)]
+        full: bool,
+    },
     /// Markdown text with headings, lists and tables. Parts are sections split at
     /// level-1 headings (DOCX, HTML), slides (PPTX) or chapters (EPUB)
     #[command(
@@ -622,7 +636,34 @@ fn first_row(range: &str) -> u64 {
 }
 
 fn run_doc(command: DocCommand, jobs: usize, max_chars: usize) -> Result<Output, ErrorInfo> {
-    let DocCommand::Text { files, parts, full } = command;
+    let (files, parts, full) = match command {
+        DocCommand::Tables { files, parts, full } => {
+            let parts = PageRange::parse(parts.as_deref())?;
+            let records = each(jobs, "doc.tables", files, |path| {
+                let mut found = rait_document::tables(&rait_document::TextRequest {
+                    path: path.into(),
+                    parts,
+                })?;
+                let retry = format!("rait doc tables {} --parts", quoted(path));
+                let truncation = limit_tables(
+                    &mut found.tables,
+                    |t| t.part,
+                    full,
+                    max_chars,
+                    &retry,
+                    "Part",
+                );
+                item(found, truncation, vec![])
+            });
+            let help = table_help(
+                &records,
+                "Run `rait doc text <file> --parts <part>` to read a table in context",
+                "No tables found in the selected parts",
+            );
+            return Ok(Output::new("docs", "file", records).help(help));
+        }
+        DocCommand::Text { files, parts, full } => (files, parts, full),
+    };
     let parts = PageRange::parse(parts.as_deref())?;
     Ok(Output::new(
         "texts",
@@ -650,6 +691,38 @@ fn run_doc(command: DocCommand, jobs: usize, max_chars: usize) -> Result<Output,
             item(doc, truncation, warnings)
         }),
     ))
+}
+
+/// Keep whole tables within `max_chars`; `unit` gives each table's page or part.
+fn limit_tables<T: Serialize>(
+    tables: &mut Vec<T>,
+    unit: impl Fn(&T) -> u32,
+    full: bool,
+    max_chars: usize,
+    retry: &str,
+    noun: &str,
+) -> Option<Truncation> {
+    if full {
+        return None;
+    }
+    let units = tables
+        .iter()
+        .map(|t| (unit(t), serde_json::to_string(t).unwrap_or_default()))
+        .collect();
+    let (kept, truncation) = limit_units(units, max_chars, retry, noun);
+    tables.truncate(kept.len().max(1).min(tables.len()));
+    truncation
+}
+
+/// `found` when the output has tables, `none` when every input has none.
+fn table_help<'a>(records: &[Record], found: &'a str, none: &'a str) -> [&'a str; 1] {
+    let any = records.iter().any(|r| {
+        r.data
+            .as_ref()
+            .and_then(|d| d["tables"].as_array())
+            .is_some_and(|t| !t.is_empty())
+    });
+    [if any { found } else { none }]
 }
 
 /// Keep whole units (pages or parts) within `max_chars` and point at the ones left
