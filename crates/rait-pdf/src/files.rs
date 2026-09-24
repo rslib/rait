@@ -1,4 +1,5 @@
-use crate::{OCRMYPDF, PDFTOPPM, PageRange, QPDF, backend_error, check_file, exec, info};
+use crate::{OCRMYPDF, PDFTOPPM, PageRange, QPDF, backend_error, exec, info};
+use rait_core::check_input;
 use rait_core::{ErrorCode, ErrorInfo, path_to_protocol};
 use serde::Serialize;
 use std::ffi::OsString;
@@ -91,7 +92,7 @@ pub fn output_stem(path: &Path) -> Result<String, ErrorInfo> {
 
 pub fn render(req: &RenderRequest) -> Result<OutputFiles, ErrorInfo> {
     let page_count = info(&req.path)?.pages;
-    let (first, last) = req.pages.bounds(page_count)?;
+    let (first, last) = req.pages.bounds(page_count, "--pages")?;
     let stem = output_stem(&req.path)?;
     // pdftoppm zero-pads page numbers to the digit count of the document page count.
     let width = page_count.to_string().len();
@@ -116,7 +117,7 @@ pub fn render(req: &RenderRequest) -> Result<OutputFiles, ErrorInfo> {
 }
 
 pub fn split(req: &SplitRequest) -> Result<OutputFiles, ErrorInfo> {
-    check_file(&req.path)?;
+    check_input(&req.path)?;
     let out = exec::run(
         QPDF,
         [OsString::from("--show-npages"), req.path.clone().into()],
@@ -132,7 +133,7 @@ pub fn split(req: &SplitRequest) -> Result<OutputFiles, ErrorInfo> {
                 "Run `rait doctor` to check the qpdf install.".to_string(),
             )
         })?;
-    let (first, last) = req.pages.bounds(page_count)?;
+    let (first, last) = req.pages.bounds(page_count, "--pages")?;
     let stem = output_stem(&req.path)?;
     let width = page_count.to_string().len();
     let pages: Vec<(u32, PathBuf)> = (first..=last)
@@ -167,7 +168,7 @@ pub fn merge(req: &MergeRequest) -> Result<Merged, ErrorInfo> {
         ));
     }
     for input in &req.inputs {
-        check_file(input)?;
+        check_input(input)?;
         if same_file(input, &req.output) {
             return Err(ErrorInfo::new(
                 ErrorCode::InvalidInput,
@@ -208,7 +209,7 @@ pub fn merge(req: &MergeRequest) -> Result<Merged, ErrorInfo> {
 }
 
 pub fn ocr(req: &OcrRequest) -> Result<Ocred, ErrorInfo> {
-    check_file(&req.path)?;
+    check_input(&req.path)?;
     let target = req
         .output_dir
         .join(format!("{}.pdf", output_stem(&req.path)?));

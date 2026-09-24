@@ -1,19 +1,17 @@
 mod exec;
 mod fallback;
 mod files;
-mod pages;
 
 pub use exec::ExecError;
 pub use files::{
     ImageFormat, MergeRequest, Merged, OcrRequest, Ocred, OutputFiles, RenderRequest, SplitRequest,
     merge, ocr, output_stem, render, split,
 };
-pub use pages::PageRange;
+pub use rait_core::PageRange;
 
-use rait_core::{ErrorCode, ErrorInfo};
+use rait_core::{ErrorCode, ErrorInfo, check_input};
 use serde::Serialize;
 use std::ffi::{OsStr, OsString};
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 /// `pdftotext` ends every page with a form feed.
@@ -159,7 +157,7 @@ pub struct SearchResult {
 
 /// Uses `pdfinfo`, or the built-in lopdf backend with a warning when it is missing.
 pub fn info(path: &Path) -> Result<PdfInfo, ErrorInfo> {
-    check_file(path)?;
+    check_input(path)?;
     match exec::run(
         PDFINFO,
         [OsStr::new("-enc"), OsStr::new("UTF-8"), path.as_os_str()],
@@ -218,7 +216,7 @@ fn parse_page_size(value: &str) -> Option<PageSizePoints> {
 
 pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
     let info = info(&req.path)?;
-    let (first, last) = req.pages.bounds(info.pages)?;
+    let (first, last) = req.pages.bounds(info.pages, "--pages")?;
     let mut warnings = info.warnings;
     let text = extract(&req.path, first, last, req.layout, &mut warnings)?;
     let pages: Vec<PageText> = (first..=last)
@@ -251,7 +249,7 @@ pub fn search(req: &SearchRequest) -> Result<SearchResult, ErrorInfo> {
         ));
     }
     let info = info(&req.path)?;
-    let (first, last) = req.pages.bounds(info.pages)?;
+    let (first, last) = req.pages.bounds(info.pages, "--pages")?;
     let mut warnings = info.warnings;
     let text = extract(&req.path, first, last, false, &mut warnings)?;
     let fold = |s: &str| {
@@ -344,27 +342,6 @@ fn encrypted() -> ErrorInfo {
 
 pub fn normalize_crlf(text: &str) -> String {
     text.replace("\r\n", "\n")
-}
-
-fn check_file(path: &Path) -> Result<(), ErrorInfo> {
-    match path.try_exists() {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(ErrorInfo::new(
-            ErrorCode::FileNotFound,
-            "Input file was not found.",
-            "Check the path.".to_string(),
-        )),
-        Err(err) if err.kind() == ErrorKind::PermissionDenied => Err(ErrorInfo::new(
-            ErrorCode::PermissionDenied,
-            "Input file cannot be accessed.",
-            "Check file permissions.".to_string(),
-        )),
-        Err(err) => Err(ErrorInfo::new(
-            ErrorCode::InvalidInput,
-            format!("Input file cannot be checked: {err}"),
-            None,
-        )),
-    }
 }
 
 fn backend_error(err: ExecError) -> ErrorInfo {

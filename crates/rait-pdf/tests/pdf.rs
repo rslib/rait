@@ -77,10 +77,10 @@ fn pdfinfo_report_without_pages_is_dependency_failed() {
 
 #[test]
 fn page_range_outside_document_is_rejected() {
-    assert_eq!(PageRange::Range(2, 3).bounds(5).unwrap(), (2, 3));
-    assert_eq!(PageRange::All.bounds(5).unwrap(), (1, 5));
+    assert_eq!(PageRange::Range(2, 3).bounds(5, "--pages").unwrap(), (2, 3));
+    assert_eq!(PageRange::All.bounds(5, "--pages").unwrap(), (1, 5));
     assert_eq!(
-        PageRange::Single(6).bounds(5).unwrap_err().code,
+        PageRange::Single(6).bounds(5, "--pages").unwrap_err().code,
         ErrorCode::InvalidPageRange
     );
 }

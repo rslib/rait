@@ -1,6 +1,11 @@
+mod range;
+
+pub use range::PageRange;
+
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::io::ErrorKind;
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -194,4 +199,26 @@ where
     });
     results.sort_by_key(|(i, _)| *i);
     results.into_iter().map(|(_, r)| r).collect()
+}
+
+/// Checks that an input path exists and can be read.
+pub fn check_input(path: &Path) -> Result<(), ErrorInfo> {
+    match path.try_exists() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ErrorInfo::new(
+            ErrorCode::FileNotFound,
+            "Input file was not found.",
+            "Check the path.".to_string(),
+        )),
+        Err(err) if err.kind() == ErrorKind::PermissionDenied => Err(ErrorInfo::new(
+            ErrorCode::PermissionDenied,
+            "Input file cannot be accessed.",
+            "Check file permissions.".to_string(),
+        )),
+        Err(err) => Err(ErrorInfo::new(
+            ErrorCode::InvalidInput,
+            format!("Input file cannot be checked: {err}"),
+            None,
+        )),
+    }
 }

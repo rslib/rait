@@ -1,4 +1,4 @@
-use rait_core::{ErrorCode, ErrorInfo};
+use crate::{ErrorCode, ErrorInfo};
 use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,18 +28,19 @@ impl PageRange {
         Err(invalid_range())
     }
 
-    /// First and last page, checked against the document page count.
-    pub fn bounds(self, page_count: u32) -> Result<(u32, u32), ErrorInfo> {
+    /// First and last item, checked against the item count. `flag` names the
+    /// option the range came from, for the error hint.
+    pub fn bounds(self, count: u32, flag: &str) -> Result<(u32, u32), ErrorInfo> {
         let (first, last) = match self {
-            Self::All => (1, page_count),
+            Self::All => (1, count),
             Self::Single(page) => (page, page),
             Self::Range(first, last) => (first, last),
         };
-        if page_count == 0 || last > page_count {
+        if count == 0 || last > count {
             return Err(ErrorInfo::new(
                 ErrorCode::InvalidPageRange,
-                format!("Page range {self} is outside the PDF page count {page_count}."),
-                format!("Use --pages between 1 and {page_count}."),
+                format!("Range {self} is outside the document, which has {count}."),
+                format!("Use {flag} between 1 and {count}."),
             ));
         }
         Ok((first, last))
@@ -59,7 +60,7 @@ impl fmt::Display for PageRange {
 fn invalid_range() -> ErrorInfo {
     ErrorInfo::new(
         ErrorCode::InvalidPageRange,
-        "Page range must be a page like `4` or a closed range like `2-7`.",
+        "Range must be a number like `4` or a closed range like `2-7`.",
         "Open and comma-separated ranges are not supported yet.".to_string(),
     )
 }
