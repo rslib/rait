@@ -10,6 +10,7 @@ clap.workspace = true
 rait-core = { path = "../rait-core" }
 rait-document = { path = "../rait-document" }
 rait-pdf = { path = "../rait-pdf" }
+rait-table = { path = "../rait-table" }
 serde.workspace = true
 serde_json.workspace = true
 toon-format = { version = "0.5", default-features = false }

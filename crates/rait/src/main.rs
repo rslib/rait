@@ -55,6 +55,11 @@ enum Commands {
         #[command(subcommand)]
         command: DocCommand,
     },
+    /// Preview CSV, TSV, Excel, ODS and Parquet tables
+    Table {
+        #[command(subcommand)]
+        command: TableCommand,
+    },
     /// List, show and install the embedded agent skills
     Skills {
         #[command(subcommand)]
@@ -188,6 +193,49 @@ enum DocCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum TableCommand {
+    /// Sheets with their row and column counts
+    #[command(
+        after_help = "Examples:\n  rait table info data.xlsx\n  rait table info *.csv *.parquet"
+    )]
+    Info {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+    /// Column names, inferred or declared types and empty-cell counts
+    #[command(
+        after_help = "Examples:\n  rait table schema data.csv\n  rait table schema book.xlsx --sheet Sales"
+    )]
+    Schema {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Sheet name or 1-based number; the first sheet by default
+        #[arg(long)]
+        sheet: Option<String>,
+    },
+    /// Data rows as a table, the first 20 by default
+    #[command(
+        after_help = "Examples:\n  rait table rows data.csv\n  rait table rows data.parquet --rows 21-120 --columns id,name\n  rait table rows book.xlsx --sheet 2"
+    )]
+    Rows {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Sheet name or 1-based number; the first sheet by default
+        #[arg(long)]
+        sheet: Option<String>,
+        /// Data rows, a row like 4 or a closed range like 21-120
+        #[arg(long)]
+        rows: Option<String>,
+        /// Columns to keep, by name or 1-based number
+        #[arg(long, value_delimiter = ',')]
+        columns: Vec<String>,
+        /// Do not apply --max-chars
+        #[arg(long)]
+        full: bool,
+    },
+}
+
 #[derive(Clone, Copy, PartialEq, ValueEnum)]
 enum InfoField {
     Author,
@@ -273,6 +321,7 @@ fn run(cli: Cli) -> Result<Option<Output>, ErrorInfo> {
         Commands::Doctor => Ok(Some(doctor())),
         Commands::Pdf { command } => run_pdf(command, jobs, max_chars).map(Some),
         Commands::Doc { command } => run_doc(command, jobs, max_chars).map(Some),
+        Commands::Table { command } => run_table(command, jobs, max_chars).map(Some),
         Commands::Skills { command } => run_skills(command, cli.format),
     }
 }
@@ -471,6 +520,105 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
         }
     };
     Ok(output)
+}
+
+fn run_table(command: TableCommand, jobs: usize, max_chars: usize) -> Result<Output, ErrorInfo> {
+    Ok(match command {
+        TableCommand::Info { files } => Output::new(
+            "tables",
+            "file",
+            each(jobs, "table.info", files, |path| {
+                to_value(rait_table::info(path)?)
+            }),
+        )
+        .help([
+            "Run `rait table schema <file>` for column types",
+            "Run `rait table rows <file> [--sheet <name>]` for data rows",
+        ]),
+        TableCommand::Schema { files, sheet } => Output::new(
+            "schemas",
+            "file",
+            each(jobs, "table.schema", files, |path| {
+                let mut schema = rait_table::schema(path, sheet.as_deref())?;
+                let warnings = std::mem::take(&mut schema.warnings);
+                item(schema, None, warnings)
+            }),
+        ),
+        TableCommand::Rows {
+            files,
+            sheet,
+            rows,
+            columns,
+            full,
+        } => {
+            let range = rows
+                .as_deref()
+                .map(|r| PageRange::parse(Some(r)))
+                .transpose()?;
+            let records = each(jobs, "table.rows", files, |path| {
+                let mut table = rait_table::rows(&rait_table::RowsRequest {
+                    path: path.into(),
+                    sheet: sheet.clone(),
+                    rows: range,
+                    columns: columns.clone(),
+                    max_chars: (!full).then_some(max_chars),
+                })?;
+                let warnings = std::mem::take(&mut table.warnings);
+                let retry = retry_rows(path, sheet.as_deref());
+                let first = first_row(&table.range);
+                let returned_last = first + table.rows.len() as u64 - 1;
+                let truncation = (returned_last < table.last_requested).then(|| Truncation {
+                    limit_chars: max_chars,
+                    returned_chars: table
+                        .rows
+                        .iter()
+                        .map(|row| Value::Object(row.clone()).to_string().chars().count())
+                        .sum(),
+                    total_chars: table.requested_chars,
+                    hint: format!(
+                        "Run `{retry} --rows {}-{}` for the rest, or add --full",
+                        returned_last + 1,
+                        table.last_requested
+                    ),
+                });
+                item(table, truncation, warnings)
+            });
+            let more = records.iter().find_map(|record| {
+                let data = record.data.as_ref()?;
+                let shown =
+                    first_row(data["range"].as_str()?) + data["rows"].as_array()?.len() as u64;
+                let total = data["total_rows"].as_u64()?;
+                (record.truncation.is_none() && shown <= total).then(|| {
+                    let path = Path::new(&record.input);
+                    let end = total.min(shown + 99);
+                    format!(
+                        "Run `{} --rows {shown}-{end}` for more of the {total} rows",
+                        retry_rows(path, sheet.as_deref())
+                    )
+                })
+            });
+            Output::new("tables", "file", records).help(more)
+        }
+    })
+}
+
+fn retry_rows(path: &Path, sheet: Option<&str>) -> String {
+    match sheet {
+        Some(sheet) => format!(
+            "rait table rows {} --sheet {}",
+            quoted(path),
+            shell_quote(sheet)
+        ),
+        None => format!("rait table rows {}", quoted(path)),
+    }
+}
+
+fn first_row(range: &str) -> u64 {
+    range
+        .split('-')
+        .next()
+        .and_then(|first| first.parse().ok())
+        .unwrap_or(1)
 }
 
 fn run_doc(command: DocCommand, jobs: usize, max_chars: usize) -> Result<Output, ErrorInfo> {
@@ -794,6 +942,7 @@ fn is_supported(name: &str) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
         || rait_document::Format::from_path(path).is_some()
+        || rait_table::Format::from_path(path).is_some()
 }
 
 fn tilde(path: &Path) -> String {

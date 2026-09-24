@@ -484,3 +484,50 @@ fn doc_text_rejects_unsupported_files() {
     assert_eq!(out.status.code(), Some(1));
     assert_eq!(json(&out)[0]["error"]["code"], "invalid_input");
 }
+
+#[test]
+fn table_rows_print_as_a_toon_table() {
+    let toon = stdout(&run(&[
+        "table",
+        "rows",
+        &fixture("sample.csv"),
+        "--rows",
+        "1-2",
+        "--columns",
+        "region,zip",
+    ]));
+    assert!(
+        toon.contains("rows[2]{region,zip}:\n      EU,\"01001\"\n      US,\"01002\""),
+        "{toon}"
+    );
+    assert!(toon.contains("--rows 3-25"));
+}
+
+#[test]
+fn table_info_and_schema() {
+    let toon = stdout(&run(&["table", "info", &fixture("sample.xlsx")]));
+    assert!(toon.contains("sheets[2]{sheet,rows,columns}:\n      Sales,25,8\n      Notes,2,2"));
+    let toon = stdout(&run(&["table", "schema", &fixture("sample.parquet")]));
+    assert!(toon.contains("columns[8]{column,type,empty}:"));
+    assert!(toon.contains("day,date,0"));
+}
+
+#[test]
+fn table_rows_truncation_names_the_rest() {
+    let out = run(&[
+        "--format",
+        "json",
+        "--max-chars",
+        "300",
+        "table",
+        "rows",
+        &fixture("sample.csv"),
+    ]);
+    let record = &json(&out)[0];
+    let shown = record["data"]["rows"].as_array().unwrap().len();
+    let hint = record["truncation"]["hint"].as_str().unwrap();
+    assert!(
+        hint.contains(&format!("--rows {}-20`", shown + 1)),
+        "{hint}"
+    );
+}
