@@ -30,11 +30,19 @@ help[2]:
   Run `rait pdf search <file>... "<query>"` to find lines
 ```
 
-`pdf text` detects tables from word positions and writes them as Markdown tables. `rait pdf tables` and `rait doc tables` return tables as rows keyed by their header:
+`pdf text` detects tables and writes them as Markdown tables. `rait pdf tables` and `rait doc tables` return tables as rows keyed by their header:
 
 ```sh
 rait pdf tables tests/fixtures/tables.pdf --pages 1
 ```
+
+PDF table detection is better with the table model. Install it once (115 MB, MIT):
+
+```sh
+rait models fetch
+```
+
+With the model, [Table Transformer](https://huggingface.co/microsoft/table-transformer-detection) finds table regions on the rendered page and word positions give the cells. It runs inside RAIT, in pure Rust with no ML runtime. Without it, a heuristic finds tables from aligned gaps between words. Each result says which `detector` ran; `--detector model|heuristic` picks one.
 
 Read a document as Markdown, one part per section, slide or chapter:
 
@@ -58,10 +66,11 @@ Output is [TOON](https://toonformat.dev/) by default. Add `--format json` when a
 
 | Program | Used by | Without it |
 | --- | --- | --- |
-| Poppler (`pdfinfo`, `pdftotext`, `pdftoppm`) | `info`, `text`, `search`, `render` | `info`, `text` and `search` use a built-in reader with a warning; `render` fails |
+| Poppler (`pdfinfo`, `pdftotext`, `pdftoppm`) | `info`, `text`, `search`, `tables`, `render` | `info`, `text` and `search` use a built-in reader with a warning; `tables` and `render` fail |
 | `qpdf` | `split`, `merge` | fails with `dependency_missing` |
 | `ocrmypdf` | `pdf ocr` | fails with `dependency_missing` |
 | `tesseract` | `image ocr` | fails with `dependency_missing` |
+| `curl` | `models fetch` | fails with `dependency_missing` |
 | `ffmpeg` (`ffmpeg`, `ffprobe`) | `media frames`, `media audio`; `media info` for formats the built-in reader does not cover | `frames` and `audio` fail; `info` still reads common audio, MP4 and MKV |
 
 ## Use it from an agent

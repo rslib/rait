@@ -1,0 +1,20 @@
+[package]
+name = "rait-vision"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+candle-core = "=0.9.2"
+candle-nn = "=0.9.2"
+rait-core = { path = "../rait-core" }
+rayon.workspace = true
+serde.workspace = true
+sha2 = "0.10"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+gemm = "0.19"
+
+[dev-dependencies]
+tempfile.workspace = true

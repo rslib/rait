@@ -14,6 +14,7 @@ rait-image = { path = "../rait-image" }
 rait-media = { path = "../rait-media" }
 rait-pdf = { path = "../rait-pdf" }
 rait-table = { path = "../rait-table" }
+rait-vision = { path = "../rait-vision" }
 serde.workspace = true
 serde_json.workspace = true
 toon-format = { version = "0.5", default-features = false }

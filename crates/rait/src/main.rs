@@ -9,9 +9,10 @@ use rait_core::{
     run_ordered,
 };
 use rait_pdf::{
-    DEPENDENCIES, ImageFormat, MergeRequest, OcrRequest, PageRange, PageText, RenderRequest,
-    SearchRequest, SplitRequest, TextRequest,
+    DEPENDENCIES, DetectorChoice, ImageFormat, MergeRequest, OcrRequest, PageRange, PageText,
+    RenderRequest, SearchRequest, SplitRequest, TextRequest,
 };
+use rait_vision::models::{self, MODELS};
 use render::{Format, Output, emit, emit_usage_error, print_value, shell_quote, write_stdout};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -76,6 +77,11 @@ enum Commands {
         #[command(subcommand)]
         command: MediaCommand,
     },
+    /// List and download the models that improve detection
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommand,
+    },
     /// List, show and install the embedded agent skills
     Skills {
         #[command(subcommand)]
@@ -112,13 +118,16 @@ enum PdfCommand {
         /// Keep detected tables as plain text lines
         #[arg(long)]
         no_tables: bool,
+        /// How to find tables. auto uses the model when installed
+        #[arg(long, value_enum, default_value_t = DetectorArg::Auto)]
+        detector: DetectorArg,
         /// Do not apply --max-chars
         #[arg(long)]
         full: bool,
     },
-    /// Tables detected from word positions, as rows keyed by the header
+    /// Detected tables, as rows keyed by the header
     #[command(
-        after_help = "Examples:\n  rait pdf tables paper.pdf\n  rait pdf tables paper.pdf --pages 4-6\n\nDetection is a heuristic: it finds cells from aligned gaps between words."
+        after_help = "Examples:\n  rait pdf tables paper.pdf\n  rait pdf tables paper.pdf --pages 4-6 --detector model\n\nWith the table model installed (`rait models fetch`), a vision model finds table regions\nand word positions give the cells. Without it, a heuristic finds tables from aligned gaps."
     )]
     Tables {
         #[arg(required = true)]
@@ -126,6 +135,9 @@ enum PdfCommand {
         /// A page like 4 or a closed range like 2-7
         #[arg(long)]
         pages: Option<String>,
+        /// How to find tables. auto uses the model when installed
+        #[arg(long, value_enum, default_value_t = DetectorArg::Auto)]
+        detector: DetectorArg,
         /// Do not apply --max-chars
         #[arg(long)]
         full: bool,
@@ -487,6 +499,43 @@ enum ImageArg {
     Jpeg,
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+enum DetectorArg {
+    /// The table model when installed, else the heuristic
+    Auto,
+    /// The table model; fails when it is not installed
+    Model,
+    /// Aligned gaps between words, no model
+    Heuristic,
+}
+
+impl From<DetectorArg> for DetectorChoice {
+    fn from(arg: DetectorArg) -> Self {
+        match arg {
+            DetectorArg::Auto => Self::Auto,
+            DetectorArg::Model => Self::Model,
+            DetectorArg::Heuristic => Self::Heuristic,
+        }
+    }
+}
+
+#[derive(Subcommand)]
+enum ModelsCommand {
+    /// Models, their size and whether they are installed
+    List,
+    /// Download and verify models into the cache
+    #[command(
+        after_help = "Examples:\n  rait models fetch\n  rait models fetch tatr --force\n\nModels go to $RAIT_MODELS_DIR, else $XDG_CACHE_HOME/rait/models, else ~/.cache/rait/models."
+    )]
+    Fetch {
+        /// Model names; all models by default
+        names: Vec<String>,
+        /// Download again even when installed
+        #[arg(long)]
+        force: bool,
+    },
+}
+
 #[derive(Subcommand)]
 enum SkillsCommand {
     /// List embedded skills
@@ -564,6 +613,7 @@ fn run(cli: Cli) -> Result<Option<Output>, ErrorInfo> {
         Commands::Image { command } => run_image(command, jobs, max_chars).map(Some),
         Commands::Archive { command } => run_archive(command, jobs, max_chars).map(Some),
         Commands::Media { command } => run_media(command, jobs).map(Some),
+        Commands::Models { command } => run_models(command).map(Some),
         Commands::Skills { command } => run_skills(command, cli.format),
     }
 }
@@ -589,6 +639,7 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
             pages,
             layout,
             no_tables,
+            detector,
             full,
         } => {
             let pages = PageRange::parse(pages.as_deref())?;
@@ -601,6 +652,7 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                         pages,
                         layout,
                         tables: !no_tables,
+                        detector: detector.into(),
                     };
                     let mut text = rait_pdf::text(&req)?;
                     let warnings = std::mem::take(&mut text.warnings);
@@ -622,13 +674,20 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                 }),
             )
         }
-        PdfCommand::Tables { files, pages, full } => {
+        PdfCommand::Tables {
+            files,
+            pages,
+            detector,
+            full,
+        } => {
             let pages = PageRange::parse(pages.as_deref())?;
             let records = each(jobs, "pdf.tables", files, |path| {
                 let mut found = rait_pdf::tables(&rait_pdf::TablesRequest {
                     path: path.into(),
                     pages,
+                    detector: detector.into(),
                 })?;
+                let warnings = std::mem::take(&mut found.warnings);
                 let retry = format!("rait pdf tables {} --pages", quoted(path));
                 let truncation = limit_tables(
                     &mut found.tables,
@@ -638,13 +697,17 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                     &retry,
                     "Page",
                 );
-                item(found, truncation, vec![])
+                item(found, truncation, warnings)
             });
-            let help = table_help(
+            let mut help = table_help(
                 &records,
                 "Run `rait pdf text <file> --pages <page>` to read a table in context",
-                "No tables found. Detection needs aligned columns; try `rait pdf text <file> --layout`",
-            );
+                "No tables found. Try `rait pdf text <file> --layout` to see the page as laid out",
+            )
+            .to_vec();
+            if used_heuristic(&records) {
+                help.push(MODEL_HINT);
+            }
             Output::new("pdfs", "file", records).help(help)
         }
         PdfCommand::Search {
@@ -1454,12 +1517,83 @@ fn unique_stems(files: &[PathBuf]) -> Result<(), ErrorInfo> {
     Ok(())
 }
 
+const MODEL_HINT: &str =
+    "Run `rait models fetch` to install the table model; it finds tables the heuristic misses";
+
+fn used_heuristic(records: &[Record]) -> bool {
+    records.iter().any(|r| {
+        r.data
+            .as_ref()
+            .is_some_and(|d| d["detector"] == "heuristic")
+    }) && models::installed(&models::TATR).is_none()
+}
+
+fn run_models(command: ModelsCommand) -> Result<Output, ErrorInfo> {
+    match command {
+        ModelsCommand::List => {
+            let records = MODELS
+                .iter()
+                .enumerate()
+                .map(|(id, spec)| {
+                    record(id, "models.list", spec.name.into(), || {
+                        to_value(models::status(spec)?)
+                    })
+                })
+                .collect();
+            let help = if MODELS.iter().all(|m| models::installed(m).is_some()) {
+                "All models are installed; `rait pdf tables` uses them automatically"
+            } else {
+                "Run `rait models fetch` to install missing models"
+            };
+            Ok(Output::new("models", "name", records).help([help]))
+        }
+        ModelsCommand::Fetch { names, force } => {
+            let specs = if names.is_empty() {
+                MODELS.to_vec()
+            } else {
+                names
+                    .iter()
+                    .map(|name| {
+                        MODELS
+                            .iter()
+                            .find(|m| m.name == name)
+                            .copied()
+                            .ok_or_else(|| {
+                                let known: Vec<&str> = MODELS.iter().map(|m| m.name).collect();
+                                ErrorInfo::new(
+                                    ErrorCode::InvalidInput,
+                                    format!(
+                                        "Unknown model `{name}`. Available: {}.",
+                                        known.join(", ")
+                                    ),
+                                    "Run `rait models list`.".to_string(),
+                                )
+                            })
+                    })
+                    .collect::<Result<_, _>>()?
+            };
+            let records = specs
+                .iter()
+                .enumerate()
+                .map(|(id, spec)| {
+                    record(id, "models.fetch", spec.name.into(), || {
+                        to_value(models::fetch(spec, force)?)
+                    })
+                })
+                .collect();
+            Ok(Output::new("models", "name", records)
+                .help(["Run `rait pdf tables <file>` to detect tables with the model"]))
+        }
+    }
+}
+
 fn doctor() -> Output {
     let mut help = vec![];
     let records = DEPENDENCIES
         .iter()
         .chain(rait_image::DEPENDENCIES)
         .chain(rait_media::DEPENDENCIES)
+        .chain(models::DEPENDENCIES)
         .enumerate()
         .map(|(id, dep)| {
             let (available, version) = match dep.probe() {
@@ -1488,6 +1622,9 @@ fn doctor() -> Output {
             )
         })
         .collect();
+    if MODELS.iter().any(|m| models::installed(m).is_none()) {
+        help.push("Run `rait models list` to see which models are missing".into());
+    }
     Output::new("programs", "program", records).help(help)
 }
 
@@ -1499,6 +1636,7 @@ fn home() -> Value {
         .iter()
         .chain(rait_image::DEPENDENCIES)
         .chain(rait_media::DEPENDENCIES)
+        .chain(models::DEPENDENCIES)
         .filter(|dep| dep.probe().is_err())
         .map(|dep| dep.program)
         .collect();
@@ -1519,6 +1657,19 @@ fn home() -> Value {
             "all installed".to_string()
         } else {
             format!("missing {}", missing.join(", "))
+        }),
+    );
+    let missing_models: Vec<&str> = MODELS
+        .iter()
+        .filter(|m| models::installed(m).is_none())
+        .map(|m| m.name)
+        .collect();
+    doc.insert(
+        "models".into(),
+        json!(if missing_models.is_empty() {
+            "all installed".to_string()
+        } else {
+            format!("missing {}", missing_models.join(", "))
         }),
     );
     let mut help = vec![];
@@ -1544,6 +1695,9 @@ fn home() -> Value {
     }
     if !missing.is_empty() {
         help.push("Run `rait doctor` to see install commands".into());
+    }
+    if !missing_models.is_empty() {
+        help.push(MODEL_HINT.into());
     }
     help.extend(GUIDE.iter().map(|line| line.to_string()));
     doc.insert("help".into(), json!(help));

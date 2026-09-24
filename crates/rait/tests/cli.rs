@@ -28,7 +28,10 @@ impl Sandbox {
 
     fn cmd(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_rait"));
-        cmd.current_dir(self.path()).env("HOME", self.path());
+        cmd.current_dir(self.path())
+            .env("HOME", self.path())
+            .env_remove("XDG_CACHE_HOME")
+            .env_remove("RAIT_MODELS_DIR");
         cmd
     }
 
@@ -303,7 +306,7 @@ fn doctor_reports_missing_programs_without_failing() {
         assert_eq!(record["data"]["available"], false);
     }
     let toon = stdout(&without_programs(&["doctor"]));
-    assert!(toon.contains("programs[8]{program,available,version,used_by}:"));
+    assert!(toon.contains("programs[9]{program,available,version,used_by}:"));
     assert!(toon.contains("Install pdfinfo (built-in reader used meanwhile)"));
 }
 
@@ -716,4 +719,31 @@ fn media_info_frames_and_audio() {
     ]);
     assert!(out.status.success(), "{}", stdout(&out));
     assert!(sandbox.path().join("a/clip.wav").exists());
+}
+
+#[test]
+fn models_list_shows_missing_model_and_fetch_hint() {
+    let out = run(&["models", "list"]);
+    assert!(out.status.success());
+    let toon = stdout(&out);
+    assert!(toon.contains("tatr,false,"), "{toon}");
+    assert!(toon.contains("rait models fetch"));
+    let err = run(&["models", "fetch", "nope"]);
+    assert_eq!(err.status.code(), Some(2));
+    assert!(stdout(&err).contains("Unknown model `nope`"));
+}
+
+#[test]
+fn pdf_tables_without_model_uses_heuristic_and_hints_fetch() {
+    if !has("pdftotext") {
+        return;
+    }
+    let tables = fixture("tables.pdf");
+    let out = run(&["--format", "json", "pdf", "tables", &tables, "--pages", "1"]);
+    assert_eq!(json(&out)[0]["data"]["detector"], "heuristic");
+    let toon = stdout(&run(&["pdf", "tables", &tables, "--pages", "1"]));
+    assert!(toon.contains("rait models fetch"));
+    let forced = run(&["pdf", "tables", &tables, "--detector", "model"]);
+    assert_eq!(forced.status.code(), Some(1));
+    assert!(stdout(&forced).contains("rait models fetch"));
 }

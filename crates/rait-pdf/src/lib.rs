@@ -1,8 +1,10 @@
+mod detect;
 mod fallback;
 mod files;
 mod layout;
 mod tables;
 
+pub use detect::{Detector, DetectorChoice};
 pub use files::{
     ImageFormat, MergeRequest, Merged, OcrRequest, Ocred, OutputFiles, RenderRequest, SplitRequest,
     merge, ocr, output_stem, render, split,
@@ -77,12 +79,14 @@ pub struct TextRequest {
     pub layout: bool,
     /// Replace detected tables with Markdown tables. Ignored with `layout`.
     pub tables: bool,
+    pub detector: DetectorChoice,
 }
 
 #[derive(Clone, Debug)]
 pub struct TablesRequest {
     pub path: PathBuf,
     pub pages: PageRange,
+    pub detector: DetectorChoice,
 }
 
 /// A table detected on a page, with rows keyed by its first row.
@@ -99,7 +103,10 @@ pub struct PdfTables {
     /// The requested `--pages` selector, `all` by default.
     pub range: String,
     pub total_pages: u32,
+    pub detector: Detector,
     pub tables: Vec<FoundTable>,
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +152,9 @@ pub struct PdfText {
     pub total_pages: u32,
     /// Tables detected and rendered as Markdown inside the page text.
     pub tables: u32,
+    /// Absent when table detection did not run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detector: Option<Detector>,
     pub pages: Vec<PageText>,
     #[serde(skip)]
     pub warnings: Vec<String>,
@@ -239,9 +249,12 @@ pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
         })
         .collect();
     let mut table_count = 0;
+    let mut detector = None;
     if req.tables && !req.layout && !warnings.iter().any(|w| w == FALLBACK_WARNING) {
         let layouts = bbox(&req.path, first, last)?;
-        let detected: Vec<_> = layouts.par_iter().map(tables::detect).collect();
+        let (detected, used) =
+            detect::find(&req.path, first, &layouts, req.detector, &mut warnings)?;
+        detector = Some(used);
         for ((page, layout), found) in pages.iter_mut().zip(&layouts).zip(detected) {
             if !found.is_empty() {
                 table_count += found.len() as u32;
@@ -259,6 +272,7 @@ pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
         range: req.pages.to_string(),
         total_pages: info.pages,
         tables: table_count,
+        detector,
         pages,
         warnings,
     })
@@ -269,7 +283,9 @@ pub fn tables(req: &TablesRequest) -> Result<PdfTables, ErrorInfo> {
     let info = info(&req.path)?;
     let (first, last) = req.pages.bounds(info.pages, "--pages")?;
     let layouts = bbox(&req.path, first, last)?;
-    let detected: Vec<_> = layouts.par_iter().map(tables::detect).collect();
+    let mut warnings = info.warnings;
+    let (detected, detector) =
+        detect::find(&req.path, first, &layouts, req.detector, &mut warnings)?;
     let mut found = vec![];
     for (page, tables) in (first..).zip(detected) {
         for table in tables {
@@ -283,7 +299,9 @@ pub fn tables(req: &TablesRequest) -> Result<PdfTables, ErrorInfo> {
     Ok(PdfTables {
         range: req.pages.to_string(),
         total_pages: info.pages,
+        detector,
         tables: found,
+        warnings,
     })
 }
 
@@ -436,7 +454,7 @@ pub fn normalize_crlf(text: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
-fn backend_error(err: ExecError) -> ErrorInfo {
+pub(crate) fn backend_error(err: ExecError) -> ErrorInfo {
     let stderr = err.stderr().to_lowercase();
     if stderr.contains("password")
         || matches!(

@@ -1,5 +1,5 @@
 use rait_core::ErrorCode;
-use rait_pdf::{PageRange, normalize_crlf};
+use rait_pdf::{DetectorChoice, PageRange, normalize_crlf};
 use std::path::Path;
 
 fn fixture() -> &'static Path {
@@ -51,6 +51,7 @@ fn extracts_fixture_text() {
         pages: PageRange::Single(1),
         layout: false,
         tables: true,
+        detector: DetectorChoice::Heuristic,
     };
     let text = rait_pdf::text(&req).unwrap();
     assert_eq!(text.pages.len(), 1);
@@ -118,6 +119,7 @@ fn table_rows(page: u32) -> Vec<Vec<serde_json::Value>> {
     let found = rait_pdf::tables(&rait_pdf::TablesRequest {
         path: tables_fixture(),
         pages: PageRange::Single(page),
+        detector: DetectorChoice::Heuristic,
     })
     .unwrap();
     found
@@ -166,6 +168,7 @@ fn spanning_header_labels_each_column() {
     let found = rait_pdf::tables(&rait_pdf::TablesRequest {
         path: tables_fixture(),
         pages: PageRange::Single(4),
+        detector: DetectorChoice::Heuristic,
     })
     .unwrap();
     assert_eq!(found.tables.len(), 2);
@@ -184,6 +187,7 @@ fn text_inlines_tables_unless_disabled() {
         pages: PageRange::Single(1),
         layout: false,
         tables,
+        detector: DetectorChoice::Heuristic,
     };
     let with = rait_pdf::text(&req(true)).unwrap();
     assert_eq!(with.tables, 1);
@@ -196,4 +200,39 @@ fn text_inlines_tables_unless_disabled() {
     let without = rait_pdf::text(&req(false)).unwrap();
     assert_eq!(without.tables, 0);
     assert!(!without.pages[0].text.contains("| Region"));
+}
+
+/// Runs only when the table model is installed (`rait models fetch`).
+#[test]
+fn model_finds_the_same_tables() {
+    if rait_vision::models::installed(&rait_vision::models::TATR).is_none() {
+        eprintln!("skipped: table model not installed");
+        return;
+    }
+    let found = rait_pdf::tables(&rait_pdf::TablesRequest {
+        path: tables_fixture(),
+        pages: PageRange::parse(None).unwrap(),
+        detector: DetectorChoice::Model,
+    })
+    .unwrap();
+    assert_eq!(found.detector, rait_pdf::Detector::Tatr);
+    let pages: Vec<u32> = found.tables.iter().map(|t| t.page).collect();
+    assert_eq!(pages, [1, 2, 4, 4]);
+    let header: Vec<&String> = found.tables[0].rows[0].keys().collect();
+    assert_eq!(header, ["Region", "Q1", "Q2", "Growth"]);
+}
+
+#[test]
+fn model_detector_without_model_says_how_to_install() {
+    if rait_vision::models::installed(&rait_vision::models::TATR).is_some() {
+        return;
+    }
+    let err = rait_pdf::tables(&rait_pdf::TablesRequest {
+        path: tables_fixture(),
+        pages: PageRange::Single(1),
+        detector: DetectorChoice::Model,
+    })
+    .unwrap_err();
+    assert_eq!(err.code, ErrorCode::DependencyMissing);
+    assert!(err.hint.as_deref().unwrap().contains("rait models fetch"));
 }

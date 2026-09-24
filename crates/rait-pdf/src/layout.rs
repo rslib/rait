@@ -28,6 +28,9 @@ impl Word {
 /// blocks of lines (indexes into `words`).
 #[derive(Clone, Debug, Default)]
 pub struct Page {
+    /// Page size in PDF points.
+    pub width: f64,
+    pub height: f64,
     pub words: Vec<Word>,
     pub blocks: Vec<Vec<Vec<usize>>>,
 }
@@ -41,7 +44,11 @@ pub fn parse(xml: &str) -> Result<Vec<Page>, String> {
     loop {
         match reader.read_event().map_err(|e| e.to_string())? {
             Event::Start(e) => match e.local_name().as_ref() {
-                "page" => pages.push(Page::default()),
+                "page" => pages.push(Page {
+                    width: coord(&e, "width")?,
+                    height: coord(&e, "height")?,
+                    ..Page::default()
+                }),
                 "block" => {
                     if let Some(page) = pages.last_mut() {
                         page.blocks.push(vec![]);
