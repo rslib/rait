@@ -1,4 +1,4 @@
-use rait_core::{ErrorCode, ErrorInfo};
+use crate::{ErrorCode, ErrorInfo};
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::process::{Command, Output};
@@ -53,6 +53,29 @@ impl From<ExecError> for ErrorInfo {
             )
             .with_detail(err.to_string()),
         }
+    }
+}
+
+/// An external program that a command needs.
+pub struct Dependency {
+    pub program: &'static str,
+    pub capabilities: &'static [&'static str],
+    /// Built-in backend used when the program is missing.
+    pub fallback: Option<&'static str>,
+    pub install: &'static str,
+    /// Flag that makes the program print its version.
+    pub version_flag: &'static str,
+}
+
+impl Dependency {
+    /// Returns the parsed version, `None` if the program runs but prints no version.
+    pub fn probe(&self) -> Result<Option<String>, ExecError> {
+        let out = run(self.program, [self.version_flag])?;
+        let text = [out.stdout, out.stderr].concat();
+        Ok(String::from_utf8_lossy(&text)
+            .split_whitespace()
+            .find(|word| word.starts_with(|c: char| c.is_ascii_digit()) && word.contains('.'))
+            .map(ToOwned::to_owned))
     }
 }
 

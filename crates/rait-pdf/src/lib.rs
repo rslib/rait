@@ -1,16 +1,16 @@
-mod exec;
 mod fallback;
 mod files;
 mod layout;
 mod tables;
 
-pub use exec::ExecError;
 pub use files::{
     ImageFormat, MergeRequest, Merged, OcrRequest, Ocred, OutputFiles, RenderRequest, SplitRequest,
     merge, ocr, output_stem, render, split,
 };
 pub use rait_core::PageRange;
+pub use rait_core::exec::{Dependency, ExecError};
 
+use rait_core::exec;
 use rait_core::{ErrorCode, ErrorInfo, check_input};
 use serde::Serialize;
 use std::ffi::{OsStr, OsString};
@@ -26,16 +26,6 @@ const QPDF: &str = "qpdf";
 const OCRMYPDF: &str = "ocrmypdf";
 
 const POPPLER_INSTALL: &str = "macOS: brew install poppler; Debian/Ubuntu: sudo apt install poppler-utils; Fedora: sudo dnf install poppler-utils";
-
-/// An external program that a PDF command needs.
-pub struct Dependency {
-    pub program: &'static str,
-    pub capabilities: &'static [&'static str],
-    /// Built-in backend used when the program is missing.
-    pub fallback: Option<&'static str>,
-    pub install: &'static str,
-    version_flag: &'static str,
-}
 
 pub const DEPENDENCIES: &[Dependency] = &[
     Dependency {
@@ -74,18 +64,6 @@ pub const DEPENDENCIES: &[Dependency] = &[
         version_flag: "--version",
     },
 ];
-
-impl Dependency {
-    /// Returns the parsed version, `None` if the program runs but prints no version.
-    pub fn probe(&self) -> Result<Option<String>, ExecError> {
-        let out = exec::run(self.program, [self.version_flag])?;
-        let text = [out.stdout, out.stderr].concat();
-        Ok(String::from_utf8_lossy(&text)
-            .split_whitespace()
-            .find(|word| word.starts_with(|c: char| c.is_ascii_digit()) && word.contains('.'))
-            .map(ToOwned::to_owned))
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct TextRequest {

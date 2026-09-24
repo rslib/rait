@@ -1,5 +1,6 @@
-use crate::{OCRMYPDF, PDFTOPPM, PageRange, QPDF, backend_error, exec, info};
+use crate::{OCRMYPDF, PDFTOPPM, PageRange, QPDF, backend_error, info};
 use rait_core::check_input;
+use rait_core::exec;
 use rait_core::{ErrorCode, ErrorInfo, path_to_protocol};
 use serde::Serialize;
 use std::ffi::OsString;

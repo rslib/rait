@@ -1199,6 +1199,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1223,7 +1224,6 @@ dependencies = [
  "rait-core",
  "serde",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]
