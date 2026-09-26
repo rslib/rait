@@ -67,7 +67,10 @@ impl Walker {
             }
             "pre" => {
                 self.flush();
-                push(&mut self.blocks, Block::Code(element.text().collect()));
+                push(
+                    &mut self.blocks,
+                    Block::Code(None, element.text().collect()),
+                );
             }
             "p" | "div" | "section" | "article" | "main" | "header" | "footer" | "aside"
             | "nav" | "blockquote" | "figure" | "figcaption" | "address" | "body" | "dl" | "dt"

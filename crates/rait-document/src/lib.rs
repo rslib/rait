@@ -1,6 +1,7 @@
 mod docx;
 mod epub;
 mod html;
+mod ipynb;
 mod markdown;
 mod pptx;
 mod xml;
@@ -17,7 +18,7 @@ use zip::ZipArchive;
 /// Largest decompressed file read from a document, against zip bombs.
 const MAX_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 
-pub const EXTENSIONS: &[&str] = &["docx", "pptx", "epub", "html", "htm", "xhtml"];
+pub const EXTENSIONS: &[&str] = &["docx", "pptx", "epub", "html", "htm", "xhtml", "ipynb"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +27,7 @@ pub enum Format {
     Pptx,
     Epub,
     Html,
+    Ipynb,
 }
 
 impl Format {
@@ -36,6 +38,7 @@ impl Format {
             "pptx" => Some(Self::Pptx),
             "epub" => Some(Self::Epub),
             "html" | "htm" | "xhtml" => Some(Self::Html),
+            "ipynb" => Some(Self::Ipynb),
             _ => None,
         }
     }
@@ -46,6 +49,7 @@ impl Format {
             Self::Pptx => "PPTX",
             Self::Epub => "EPUB",
             Self::Html => "HTML",
+            Self::Ipynb => "Jupyter notebook",
         }
     }
 }
@@ -56,8 +60,8 @@ pub struct TextRequest {
     pub parts: PageRange,
 }
 
-/// One unit of a document: a section starting at a level-1 heading (DOCX, HTML),
-/// a slide (PPTX) or a chapter (EPUB). Text is GitHub-flavoured Markdown.
+/// One unit of a document: a section starting at a level-1 heading (DOCX, HTML,
+/// IPYNB), a slide (PPTX) or a chapter (EPUB). Text is GitHub-flavoured Markdown.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Part {
     pub part: u32,
@@ -187,6 +191,10 @@ fn parts(path: &Path, format: Format) -> Result<Vec<Vec<Block>>, String> {
             }
             Ok(slides)
         }
+        Format::Ipynb => {
+            let json = read_limited(File::open(path).map_err(|err| err.to_string())?)?;
+            ipynb::blocks(&json)
+        }
         Format::Epub => {
             let mut zip = open_zip(path)?;
             let opf_path = epub::package_path(&entry(&mut zip, "META-INF/container.xml")?)?;
@@ -252,7 +260,7 @@ fn unsupported(path: &Path) -> ErrorInfo {
     ErrorInfo::new(
         ErrorCode::InvalidInput,
         format!("Files {ext} are not supported."),
-        "Use .docx, .pptx, .epub or .html, or `rait pdf text` for PDFs.".to_string(),
+        "Use .docx, .pptx, .epub, .html or .ipynb, or `rait pdf text` for PDFs.".to_string(),
     )
 }
 

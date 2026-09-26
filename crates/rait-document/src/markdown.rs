@@ -11,7 +11,8 @@ pub enum Block {
         text: String,
     },
     Table(Vec<Vec<String>>),
-    Code(String),
+    /// A fenced code block, with an optional info-string language.
+    Code(Option<String>, String),
 }
 
 pub fn render(blocks: &[Block]) -> String {
@@ -46,8 +47,10 @@ pub fn render(blocks: &[Block]) -> String {
                 out.push_str(&one_line(text));
             }
             Block::Table(rows) => out.push_str(&markdown_table(rows)),
-            Block::Code(text) => {
-                out.push_str("```\n");
+            Block::Code(lang, text) => {
+                out.push_str("```");
+                out.push_str(lang.as_deref().unwrap_or(""));
+                out.push('\n');
                 out.push_str(text.trim_end_matches('\n'));
                 out.push_str("\n```");
             }
@@ -88,7 +91,7 @@ pub fn push(blocks: &mut Vec<Block>, block: Block) {
         Block::Heading(_, text)
         | Block::Paragraph(text)
         | Block::Item { text, .. }
-        | Block::Code(text) => text.trim().is_empty(),
+        | Block::Code(_, text) => text.trim().is_empty(),
         Block::Table(rows) => rows
             .iter()
             .all(|row| row.iter().all(|cell| cell.is_empty())),

@@ -154,3 +154,76 @@ fn tables_are_keyed_by_their_header() {
     .unwrap();
     assert!(none.tables.is_empty());
 }
+
+#[test]
+fn ipynb_splits_parts_at_level_one_markdown_headings() {
+    let out = read(fixture("sample.ipynb"), PageRange::All);
+    assert_eq!(out.format, Format::Ipynb);
+    assert_eq!(out.parts.len(), 2);
+    assert!(out.parts[0].text.starts_with("# Title\n\nIntro paragraph."));
+    assert!(out.parts[1].text.starts_with("# Second\n\nMore notes."));
+}
+
+#[test]
+fn ipynb_code_cells_are_fenced_with_the_kernel_language() {
+    let text = all("sample.ipynb")[0].clone();
+    assert!(text.contains("```python\nprint('hello')\n```"));
+}
+
+#[test]
+fn ipynb_stream_and_result_outputs_are_fenced_text() {
+    let text = all("sample.ipynb")[0].clone();
+    assert!(text.contains("```text\nhello\nworld\n```"));
+    assert!(text.contains("```text\n42\n```"));
+}
+
+#[test]
+fn ipynb_images_become_a_placeholder_never_base64() {
+    let text = all("sample.ipynb")[0].clone();
+    assert!(text.contains("[image/png output omitted]"));
+    assert!(!text.contains("aGVsbG8"));
+}
+
+#[test]
+fn ipynb_errors_are_ename_evalue_with_ansi_stripped() {
+    let text = all("sample.ipynb")[0].clone();
+    assert!(text.contains("ValueError: bad value"));
+    assert!(!text.contains('\u{1b}'));
+    assert!(!text.contains("Traceback"));
+}
+
+#[test]
+fn ipynb_long_output_is_truncated() {
+    let text = all("sample.ipynb")[0].clone();
+    assert!(text.contains("line 20"));
+    assert!(!text.contains("line 21"));
+    assert!(text.contains("more lines omitted"));
+}
+
+#[test]
+fn ipynb_html_output_tables_are_extracted() {
+    let got = rait_document::tables(&TextRequest {
+        path: fixture("sample.ipynb"),
+        parts: PageRange::All,
+    })
+    .unwrap();
+    assert_eq!(got.tables.len(), 1);
+    assert_eq!(got.tables[0].part, 2);
+    assert_eq!(got.tables[0].rows[0]["region"], "EU");
+    assert_eq!(got.tables[0].rows[1]["revenue"], 7);
+}
+
+#[test]
+fn ipynb_bad_input_is_invalid_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("broken.ipynb");
+    std::fs::write(&path, "not json").unwrap();
+    let err = text(&TextRequest {
+        path,
+        parts: PageRange::All,
+    })
+    .unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+    assert!(err.message.contains("Jupyter notebook"));
+    assert!(err.hint.is_some());
+}
