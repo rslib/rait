@@ -52,12 +52,12 @@ enum Commands {
         #[command(subcommand)]
         command: PdfCommand,
     },
-    /// Read DOCX, PPTX, EPUB and HTML documents as Markdown
+    /// Read DOCX, PPTX, EPUB, HTML and Jupyter notebooks as Markdown
     Doc {
         #[command(subcommand)]
         command: DocCommand,
     },
-    /// Preview CSV, TSV, Excel, ODS and Parquet tables
+    /// Preview CSV, TSV, Excel, ODS, Parquet and SQLite tables
     Table {
         #[command(subcommand)]
         command: TableCommand,
@@ -142,6 +142,17 @@ enum PdfCommand {
         #[arg(long)]
         full: bool,
     },
+    /// Table of contents: bookmarks, or headings found in the text
+    #[command(
+        after_help = "Examples:\n  rait pdf outline paper.pdf\n  rait pdf outline book.pdf --headings\n\nWithout bookmarks, headings are lines in larger text or short lines that open with a\nsection number such as 3.2."
+    )]
+    Outline {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Find headings in the text even when the PDF has bookmarks
+        #[arg(long)]
+        headings: bool,
+    },
     /// Find lines containing a literal query
     #[command(
         after_help = "Examples:\n  rait pdf search paper.pdf \"cache miss\"\n  rait pdf search *.pdf latency -i --pages 1-5"
@@ -158,6 +169,24 @@ enum PdfCommand {
         /// Do not apply --max-chars to hit lines
         #[arg(long)]
         full: bool,
+    },
+    /// Save each captioned figure as a PNG named <stem>-p<page>-<n>.png
+    #[command(
+        after_help = "Examples:\n  rait pdf figures paper.pdf --output figs\n  rait pdf figures paper.pdf --pages 3-5 --output figs --dpi 200\n\nA figure is the area above a `Figure N:` caption, up to the nearest paragraph, so\nvector plots are found as well as images. Figures without such a caption are missed."
+    )]
+    Figures {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+        /// A page like 4 or a closed range like 2-7
+        #[arg(long)]
+        pages: Option<String>,
+        #[arg(long, default_value_t = 150)]
+        dpi: u32,
+        /// Replace existing output files
+        #[arg(long)]
+        force: bool,
     },
     /// Render pages to images named <stem>-<page>.<ext>
     #[command(
@@ -236,7 +265,7 @@ enum DocCommand {
         full: bool,
     },
     /// Markdown text with headings, lists and tables. Parts are sections split at
-    /// level-1 headings (DOCX, HTML), slides (PPTX) or chapters (EPUB)
+    /// level-1 headings (DOCX, HTML, notebooks), slides (PPTX) or chapters (EPUB)
     #[command(
         after_help = "Examples:\n  rait doc text report.docx\n  rait doc text deck.pptx --parts 2-4\n  rait doc text book.epub --parts 3 --full"
     )]
@@ -447,7 +476,7 @@ enum ImageTo {
 enum TableCommand {
     /// Sheets with their row and column counts
     #[command(
-        after_help = "Examples:\n  rait table info data.xlsx\n  rait table info *.csv *.parquet"
+        after_help = "Examples:\n  rait table info data.xlsx\n  rait table info *.csv *.parquet\n  rait table info app.sqlite"
     )]
     Info {
         #[arg(required = true)]
@@ -710,6 +739,16 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
             }
             Output::new("pdfs", "file", records).help(help)
         }
+        PdfCommand::Outline { files, headings } => Output::new(
+            "pdfs",
+            "file",
+            each(jobs, "pdf.outline", files, |path| {
+                let mut outline = rait_pdf::outline(path, headings)?;
+                let warnings = std::mem::take(&mut outline.warnings);
+                item(outline, None, warnings)
+            }),
+        )
+        .help(["Run `rait pdf text <file> --pages <page>` to read a section from its first page"]),
         PdfCommand::Search {
             files,
             query,
@@ -755,6 +794,30 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                 )
             };
             Output::new("results", "file", records).help([help])
+        }
+        PdfCommand::Figures {
+            files,
+            output,
+            pages,
+            dpi,
+            force,
+        } => {
+            let pages = PageRange::parse(pages.as_deref())?;
+            unique_stems(&files)?;
+            Output::new(
+                "pdfs",
+                "file",
+                each(jobs, "pdf.figures", files, |path| {
+                    to_value(rait_pdf::figures(&rait_pdf::FiguresRequest {
+                        path: path.into(),
+                        output_dir: output.clone(),
+                        pages,
+                        dpi,
+                        force,
+                    })?)
+                }),
+            )
+            .help(["Read a figure file with your image viewer tool to see it"])
         }
         PdfCommand::Render {
             files,

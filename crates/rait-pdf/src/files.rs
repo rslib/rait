@@ -234,14 +234,18 @@ pub fn ocr(req: &OcrRequest) -> Result<Ocred, ErrorInfo> {
     })
 }
 
-fn prepare_outputs(dir: &Path, targets: &[PathBuf], force: bool) -> Result<(), ErrorInfo> {
+pub(crate) fn prepare_outputs(
+    dir: &Path,
+    targets: &[PathBuf],
+    force: bool,
+) -> Result<(), ErrorInfo> {
     if !force && let Some(existing) = targets.iter().find(|target| target.exists()) {
         return Err(output_exists(&path_to_protocol(existing)?));
     }
     fs::create_dir_all(dir).map_err(|err| io_error("Failed to create the output directory", err))
 }
 
-fn collect_outputs(targets: &[PathBuf]) -> Result<OutputFiles, ErrorInfo> {
+pub(crate) fn collect_outputs(targets: &[PathBuf]) -> Result<OutputFiles, ErrorInfo> {
     let mut files = Vec::with_capacity(targets.len());
     for target in targets {
         if !target.exists() {

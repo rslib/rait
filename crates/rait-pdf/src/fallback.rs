@@ -1,3 +1,4 @@
+use crate::outline::OutlineEntry;
 use crate::{PAGE_BREAK, PageSizePoints, PdfInfo, encrypted};
 use lopdf::{Document, Object, decode_text_string};
 use rait_core::ErrorInfo;
@@ -76,4 +77,22 @@ fn pdf_error(err: lopdf::Error) -> ErrorInfo {
         return encrypted();
     }
     crate::not_a_pdf().with_detail(message)
+}
+
+/// Bookmarks, empty when the PDF has none or they cannot be resolved to pages.
+pub fn bookmarks(path: &Path) -> Result<Vec<OutlineEntry>, ErrorInfo> {
+    let doc = load(path)?;
+    let Ok(toc) = doc.get_toc() else {
+        return Ok(vec![]);
+    };
+    Ok(toc
+        .toc
+        .into_iter()
+        .map(|entry| OutlineEntry {
+            level: entry.level as u32,
+            title: entry.title.split_whitespace().collect::<Vec<_>>().join(" "),
+            page: entry.page as u32,
+        })
+        .filter(|entry| !entry.title.is_empty())
+        .collect())
 }

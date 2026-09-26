@@ -1,6 +1,6 @@
 # RAIT
 
-RAIT is a command-line tool that gives coding agents a stable, token-efficient interface to local PDFs and documents: PDF metadata, text, search, rendering, splitting, merging and OCR, DOCX, PPTX, EPUB and HTML as Markdown with headings, lists and tables, previews of CSV, TSV, Excel, ODS and Parquet tables, image info, conversion, shrinking and OCR, listing, reading and safe extraction of zip, 7z, ar and tar archives (plain, gz, zst, xz or bz2), and audio and video info, frame grabs and audio extraction.
+RAIT is a command-line tool that gives coding agents a stable, token-efficient interface to local PDFs and documents: PDF metadata, outlines, text, tables, figures, search, rendering, splitting, merging and OCR, DOCX, PPTX, EPUB, HTML and Jupyter notebooks as Markdown with headings, lists and tables, previews of CSV, TSV, Excel, ODS, Parquet and SQLite tables, image info, conversion, shrinking and OCR, listing, reading and safe extraction of zip, 7z, ar and tar archives (plain, gz, zst, xz or bz2), and audio and video info, frame grabs and audio extraction.
 
 RAIT follows the [AXI (Agent eXperience Interface)](https://axi.md/) principles for agent-ergonomic CLIs:
 
@@ -44,18 +44,29 @@ rait models fetch
 
 With the models, [Table Transformer](https://huggingface.co/microsoft/table-transformer-detection) finds table regions on the rendered page, its [structure model](https://huggingface.co/microsoft/table-transformer-structure-recognition-v1.1-all) finds the rows, columns, header and spanning cells in each table, and the PDF's words fill the cells. They run inside RAIT, in pure Rust with no ML runtime. Without them, a heuristic finds tables from aligned gaps between words. Each result says which `detector` ran; `--detector model|heuristic` picks one. A table that continues over several pages under a repeated header comes back as one table with an `end_page`.
 
-Read a document as Markdown, one part per section, slide or chapter:
+See a PDF's table of contents, then save its figures as PNGs with their captions:
+
+```sh
+rait pdf outline tests/fixtures/figures.pdf
+rait pdf figures tests/fixtures/figures.pdf --output figs
+```
+
+The outline comes from the PDF's bookmarks. Without useful bookmarks, headings are guessed from text size and section numbers, and the output says so. A figure is the area next to a `Figure N:` caption up to the nearest paragraph, so vector plots are found as well as images.
+
+Read a document or a Jupyter notebook as Markdown, one part per section, slide or chapter. Notebook outputs are shortened and images are left out:
 
 ```sh
 rait doc text tests/fixtures/sample.docx --parts 2
+rait doc text tests/fixtures/sample.ipynb
 ```
 
-Preview a table: sheets, column types, then rows as a table:
+Preview a table: sheets, column types, then rows as a table. For SQLite, each table and view is a sheet:
 
 ```sh
 rait table info tests/fixtures/sample.xlsx
 rait table schema tests/fixtures/sample.csv
 rait table rows tests/fixtures/sample.parquet --rows 1-5 --columns region,revenue
+rait table rows tests/fixtures/sample.sqlite --sheet sales
 ```
 
 Output is [TOON](https://toonformat.dev/) by default. Add `--format json` when a script parses it.
@@ -66,7 +77,7 @@ Output is [TOON](https://toonformat.dev/) by default. Add `--format json` when a
 
 | Program | Used by | Without it |
 | --- | --- | --- |
-| Poppler (`pdfinfo`, `pdftotext`, `pdftoppm`) | `info`, `text`, `search`, `tables`, `render` | `info`, `text` and `search` use a built-in reader with a warning; `tables` and `render` fail |
+| Poppler (`pdfinfo`, `pdftotext`, `pdftoppm`) | `info`, `outline`, `text`, `search`, `tables`, `figures`, `render` | `info`, `text` and `search` use a built-in reader with a warning; `outline` still reads bookmarks; `tables`, `figures` and `render` fail |
 | `qpdf` | `split`, `merge` | fails with `dependency_missing` |
 | `ocrmypdf` | `pdf ocr` | fails with `dependency_missing` |
 | `tesseract` | `image ocr` | fails with `dependency_missing` |

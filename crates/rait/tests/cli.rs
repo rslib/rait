@@ -328,7 +328,9 @@ fn failures_render_as_errors_table_with_stderr_detail() {
 fn missing_subcommand_lists_subcommands() {
     let out = run(&["pdf"]);
     assert_eq!(out.status.code(), Some(2));
-    assert!(stdout(&out).contains("<info|text|tables|search|render|split|merge|ocr>"));
+    assert!(
+        stdout(&out).contains("<info|text|tables|outline|search|figures|render|split|merge|ocr>")
+    );
 }
 
 #[test]

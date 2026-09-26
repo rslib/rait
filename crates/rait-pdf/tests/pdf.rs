@@ -265,3 +265,67 @@ fn long_table_joins_across_pages_but_captioned_one_does_not() {
     assert_eq!(spans, [(5, Some(6), 70), (6, None, 3)]);
     assert_eq!(found.tables[0].rows[69]["Node"], "node70");
 }
+
+fn figures_fixture() -> std::path::PathBuf {
+    Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/figures.pdf"
+    ))
+    .into()
+}
+
+#[test]
+fn outline_reads_bookmarks_then_guesses_headings() {
+    let marks = rait_pdf::outline(&figures_fixture(), false).unwrap();
+    assert_eq!(marks.source, rait_pdf::OutlineSource::Bookmarks);
+    let titles: Vec<(u32, &str)> = marks
+        .entries
+        .iter()
+        .map(|e| (e.level, e.title.as_str()))
+        .collect();
+    assert_eq!(
+        titles,
+        [(1, "Introduction"), (2, "Method details"), (1, "Results")]
+    );
+    assert!(marks.warnings.is_empty());
+    let guessed = rait_pdf::outline(&figures_fixture(), true).unwrap();
+    assert_eq!(guessed.source, rait_pdf::OutlineSource::Headings);
+    let titles: Vec<(u32, &str)> = guessed
+        .entries
+        .iter()
+        .map(|e| (e.level, e.title.as_str()))
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            (1, "1 Introduction"),
+            (2, "1.1 Method details"),
+            (1, "2 Results")
+        ]
+    );
+    assert!(guessed.warnings[0].contains("guessed"));
+}
+
+#[test]
+fn figures_are_cropped_above_or_below_their_caption() {
+    let dir = tempfile::tempdir().unwrap();
+    let req = rait_pdf::FiguresRequest {
+        path: figures_fixture(),
+        output_dir: dir.path().into(),
+        pages: PageRange::parse(None).unwrap(),
+        dpi: 72,
+        force: false,
+    };
+    let found = rait_pdf::figures(&req).unwrap();
+    let labels: Vec<&str> = found.figures.iter().map(|f| f.label.as_str()).collect();
+    assert_eq!(labels, ["Figure 1", "Figure 2"]);
+    assert_eq!(
+        found.figures[1].caption,
+        "Figure 2: Throughput by node, caption above."
+    );
+    for figure in &found.figures {
+        assert!(std::fs::metadata(&figure.file).unwrap().len() > 0);
+    }
+    let again = rait_pdf::figures(&req).unwrap_err();
+    assert_eq!(again.code, ErrorCode::OutputExists);
+}

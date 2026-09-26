@@ -1,0 +1,59 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{caption}
+\usepackage[bookmarks=true]{hyperref}
+
+% Reproducible output: no embedded build date/time or trailer id.
+\pdfinfoomitdate=1
+\pdftrailerid{}
+\pdfsuppressptexinfo=-1
+
+\pagestyle{empty}
+\captionsetup{labelsep=colon}
+
+\newcommand{\plot}{%
+  \setlength{\unitlength}{1pt}%
+  \begin{picture}(240,120)
+    \put(0,0){\line(1,0){240}}
+    \put(0,0){\line(0,1){120}}
+    \put(0,0){\line(2,1){220}}
+    \put(-6,-12){0}\put(110,-12){10}\put(225,-12){20}
+    \put(120,60){latency}
+  \end{picture}}
+
+\begin{document}
+
+\section{Introduction}
+
+This document tests figure extraction and outlines. The text around each
+figure is ordinary prose, long enough that every line holds many words.
+
+\begin{figure}[h]
+  \centering
+  \plot
+  \caption{Latency grows with load.}
+\end{figure}
+
+Figure 2 shows the same data from another angle, and this sentence names a
+figure without being its caption, so it must not be read as one.
+
+\subsection{Method details}
+
+More prose follows here so that the section has a body of its own, with
+several words on every line of the paragraph below the heading.
+
+\begin{figure}[h]
+  \centering
+  \caption{Throughput by node, caption above.}
+  \plot
+\end{figure}
+
+\section{Results}
+
+The results section closes the document with one more paragraph of prose so
+the outline has a second top-level entry.
+
+\end{document}

@@ -1,7 +1,9 @@
 mod detect;
 mod fallback;
+mod figures;
 mod files;
 mod layout;
+mod outline;
 mod structure;
 mod tables;
 
@@ -10,6 +12,7 @@ pub use files::{
     ImageFormat, MergeRequest, Merged, OcrRequest, Ocred, OutputFiles, RenderRequest, SplitRequest,
     merge, ocr, output_stem, render, split,
 };
+pub use outline::{OutlineEntry, OutlineSource};
 pub use rait_core::PageRange;
 pub use rait_core::exec::{Dependency, ExecError};
 
@@ -281,6 +284,139 @@ pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
         pages,
         warnings,
     })
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PdfOutline {
+    pub total_pages: u32,
+    pub source: OutlineSource,
+    pub entries: Vec<OutlineEntry>,
+    #[serde(skip)]
+    pub warnings: Vec<String>,
+}
+
+/// The PDF's bookmarks, or headings found in its text when it has no useful
+/// bookmarks or `headings` is set.
+pub fn outline(path: &Path, headings: bool) -> Result<PdfOutline, ErrorInfo> {
+    let info = info(path)?;
+    let mut warnings = info.warnings;
+    if !headings {
+        let entries = fallback::bookmarks(path)?;
+        if outline::useful(&entries, info.pages) {
+            return Ok(PdfOutline {
+                total_pages: info.pages,
+                source: OutlineSource::Bookmarks,
+                entries,
+                warnings,
+            });
+        }
+    }
+    let entries = match bbox(path, 1, info.pages) {
+        Ok(layouts) => {
+            warnings.push(
+                "Headings are guessed from text size and section numbers; check them with `rait pdf text`."
+                    .into(),
+            );
+            outline::headings(1, &layouts)
+        }
+        Err(err) if err.code == ErrorCode::DependencyMissing => {
+            warnings.push(
+                "No bookmarks, and finding headings needs `pdftotext`; run `rait doctor`.".into(),
+            );
+            vec![]
+        }
+        Err(err) => return Err(err),
+    };
+    Ok(PdfOutline {
+        total_pages: info.pages,
+        source: OutlineSource::Headings,
+        entries,
+        warnings,
+    })
+}
+
+#[derive(Clone, Debug)]
+pub struct FiguresRequest {
+    pub path: PathBuf,
+    pub output_dir: PathBuf,
+    pub pages: PageRange,
+    pub dpi: u32,
+    pub force: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Figure {
+    pub page: u32,
+    /// `Figure 3`, from the caption.
+    pub label: String,
+    pub caption: String,
+    pub file: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PdfFigures {
+    pub total_pages: u32,
+    pub figures: Vec<Figure>,
+}
+
+/// Figures with a `Figure N:` caption, each cropped from its page into a PNG.
+pub fn figures(req: &FiguresRequest) -> Result<PdfFigures, ErrorInfo> {
+    let info = info(&req.path)?;
+    let (first, last) = req.pages.bounds(info.pages, "--pages")?;
+    let layouts = bbox(&req.path, first, last)?;
+    let stem = files::output_stem(&req.path)?;
+    let width = info.pages.to_string().len();
+    let mut planned = vec![];
+    for (page, layout) in (first..).zip(&layouts) {
+        for (i, found) in figures::find(layout).into_iter().enumerate() {
+            let target = req
+                .output_dir
+                .join(format!("{stem}-p{page:0width$}-{}.png", i + 1));
+            planned.push((page, found, target));
+        }
+    }
+    let targets: Vec<PathBuf> = planned.iter().map(|(_, _, t)| t.clone()).collect();
+    files::prepare_outputs(&req.output_dir, &targets, req.force)?;
+    let scale = f64::from(req.dpi) / 72.0;
+    planned
+        .par_iter()
+        .map(|(page, found, target)| {
+            let [x0, y0, x1, y1] = found.bounds;
+            let args: Vec<OsString> = vec![
+                "-png".into(),
+                "-singlefile".into(),
+                "-r".into(),
+                req.dpi.to_string().into(),
+                "-f".into(),
+                page.to_string().into(),
+                "-l".into(),
+                page.to_string().into(),
+                "-x".into(),
+                ((x0 * scale).floor().max(0.0) as u32).to_string().into(),
+                "-y".into(),
+                ((y0 * scale).floor().max(0.0) as u32).to_string().into(),
+                "-W".into(),
+                (((x1 - x0) * scale).ceil() as u32).to_string().into(),
+                "-H".into(),
+                (((y1 - y0) * scale).ceil() as u32).to_string().into(),
+                req.path.clone().into(),
+                target.with_extension("").into(),
+            ];
+            exec::run(PDFTOPPM, args).map_err(backend_error)?;
+            Ok(Figure {
+                page: *page,
+                label: found.label.clone(),
+                caption: found.caption.clone(),
+                file: files::collect_outputs(std::slice::from_ref(target))?
+                    .files
+                    .remove(0),
+            })
+        })
+        .collect::<Result<Vec<_>, ErrorInfo>>()
+        .map(|figures| PdfFigures {
+            total_pages: info.pages,
+            figures,
+        })
 }
 
 /// Tables detected from word positions. Needs `pdftotext`; there is no fallback.
