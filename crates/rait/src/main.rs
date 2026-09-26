@@ -1,5 +1,6 @@
 mod guide;
 mod render;
+mod search;
 
 use clap::error::{ContextKind, ContextValue, ErrorKind as ClapErrorKind};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -77,6 +78,20 @@ enum Commands {
         #[command(subcommand)]
         command: MediaCommand,
     },
+    /// Find lines containing a literal query in PDFs, documents, notebooks and tables
+    #[command(
+        after_help = "Examples:\n  rait search *.pdf *.docx \"cache miss\"\n  rait search notes.ipynb data.sqlite latency -i\n\nHits are located by page (PDF), part (documents and notebooks) or row (tables;\none line per row as `column: value` pairs). Use `rait pdf search --pages` to search part of a PDF."
+    )]
+    Search {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        query: String,
+        #[arg(short, long)]
+        ignore_case: bool,
+        /// Do not apply --max-chars to hit lines
+        #[arg(long)]
+        full: bool,
+    },
     /// List and download the models that improve detection
     Models {
         #[command(subcommand)]
@@ -104,7 +119,7 @@ enum PdfCommand {
     },
     /// Extract text. Pages are separated by form feed
     #[command(
-        after_help = "Examples:\n  rait pdf text paper.pdf --pages 1-3\n  rait pdf text a.pdf b.pdf --max-chars 20000\n  rait pdf text paper.pdf --full"
+        after_help = "Examples:\n  rait pdf text paper.pdf --pages 1-3\n  rait pdf text paper.pdf --section Evaluation\n  rait pdf text a.pdf b.pdf --max-chars 20000\n  rait pdf text paper.pdf --full"
     )]
     Text {
         #[arg(required = true)]
@@ -112,6 +127,9 @@ enum PdfCommand {
         /// A page like 4 or a closed range like 2-7
         #[arg(long)]
         pages: Option<String>,
+        /// Read one section, found by its title (or number) in `rait pdf outline`
+        #[arg(long, conflicts_with = "pages")]
+        section: Option<String>,
         /// Keep the physical layout instead of detecting tables
         #[arg(long)]
         layout: bool,
@@ -643,6 +661,33 @@ fn run(cli: Cli) -> Result<Option<Output>, ErrorInfo> {
         Commands::Archive { command } => run_archive(command, jobs, max_chars).map(Some),
         Commands::Media { command } => run_media(command, jobs).map(Some),
         Commands::Models { command } => run_models(command).map(Some),
+        Commands::Search {
+            files,
+            query,
+            ignore_case,
+            full,
+        } => {
+            let records = each(jobs, "search", files, |path| {
+                let mut found =
+                    search::search(path, &query, ignore_case, (!full).then_some(max_chars))?;
+                let warnings = std::mem::take(&mut found.warnings);
+                let truncation = (found.hits.len() < found.matches).then(|| Truncation {
+                    limit_chars: max_chars,
+                    returned_chars: found.hits.iter().map(|h| h.line.chars().count()).sum(),
+                    total_chars: found.matched_chars,
+                    hint: format!(
+                        "Run `rait search {} {} --full` for all {} hits",
+                        quoted(path),
+                        shell_quote(&query),
+                        found.matches
+                    ),
+                });
+                item(found, truncation, warnings)
+            });
+            Ok(Some(Output::new("files", "file", records).help([
+                "Read a hit in context with `rait pdf text <file> --pages <page>`, `rait doc text <file> --parts <part>` or `rait table rows <file> --rows <row>`",
+            ])))
+        }
         Commands::Skills { command } => run_skills(command, cli.format),
     }
 }
@@ -669,6 +714,7 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
             layout,
             no_tables,
             detector,
+            section,
             full,
         } => {
             let pages = PageRange::parse(pages.as_deref())?;
@@ -682,6 +728,7 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
                         layout,
                         tables: !no_tables,
                         detector: detector.into(),
+                        section: section.clone(),
                     };
                     let mut text = rait_pdf::text(&req)?;
                     let warnings = std::mem::take(&mut text.warnings);

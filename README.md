@@ -51,7 +51,14 @@ rait pdf outline tests/fixtures/figures.pdf
 rait pdf figures tests/fixtures/figures.pdf --output figs
 ```
 
-The outline comes from the PDF's bookmarks. Without useful bookmarks, headings are guessed from text size and section numbers, and the output says so. A figure is the area next to a `Figure N:` caption up to the nearest paragraph, so vector plots are found as well as images.
+Read one section by its outline title, and search many files of any supported kind at once:
+
+```sh
+rait pdf text tests/fixtures/figures.pdf --section "Method details"
+rait search tests/fixtures/*.docx tests/fixtures/*.ipynb tests/fixtures/*.sqlite EU
+```
+
+Search hits give the page (PDF), part (documents and notebooks) or row (tables) to read next. The outline comes from the PDF's bookmarks. Without useful bookmarks, headings are guessed from text size and section numbers, and the output says so. A figure is the area next to a `Figure N:` caption up to the nearest paragraph, so vector plots are found as well as images.
 
 Read a document or a Jupyter notebook as Markdown, one part per section, slide or chapter. Notebook outputs are shortened and images are left out:
 

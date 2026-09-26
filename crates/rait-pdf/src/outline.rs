@@ -75,6 +75,97 @@ struct Line {
     kind: Kind,
 }
 
+/// A section found by name: its outline entry, its pages and the title of the
+/// entry that ends it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Section {
+    pub title: String,
+    pub first: u32,
+    pub last: u32,
+    pub next: Option<String>,
+}
+
+/// Letters and digits only, lower case: `I NTRODUCTION` and `1 Introduction`
+/// both hold `introduction`.
+pub fn compact(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The entry named `name`, running to the next entry at the same or a higher
+/// level. Exact titles win over titles that only contain `name`, and a
+/// number such as `3.1` matches a numbered title.
+pub fn section(entries: &[OutlineEntry], name: &str, pages: u32) -> Option<Section> {
+    let want = compact(name);
+    if want.is_empty() {
+        return None;
+    }
+    let bare = |t: &str| compact(unnumbered(t));
+    let found = entries
+        .iter()
+        .position(|e| bare(&e.title) == want || compact(&e.title) == want)
+        .or_else(|| {
+            entries
+                .iter()
+                .position(|e| compact(&e.title).starts_with(&want))
+        })
+        .or_else(|| {
+            entries
+                .iter()
+                .position(|e| compact(&e.title).contains(&want))
+        })?;
+    let entry = &entries[found];
+    let next = entries[found + 1..].iter().find(|e| e.level <= entry.level);
+    Some(Section {
+        title: entry.title.clone(),
+        first: entry.page,
+        last: next.map_or(pages, |n| n.page.max(entry.page)),
+        next: next.map(|n| n.title.clone()),
+    })
+}
+
+/// `title` without a leading section number such as `2.1`, `IV.` or `A.`.
+fn unnumbered(title: &str) -> &str {
+    let title = title.trim_start();
+    let Some((first, rest)) = title.split_once(' ') else {
+        return title;
+    };
+    let label = first.trim_end_matches('.');
+    let numeric = !label.is_empty()
+        && label
+            .split('.')
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    let roman = !label.is_empty() && label.chars().all(|c| "IVX".contains(c));
+    let letter =
+        first.len() == 2 && first.ends_with('.') && label.chars().all(|c| c.is_ascii_uppercase());
+    if numeric || roman || letter {
+        rest.trim_start()
+    } else {
+        title
+    }
+}
+
+/// Index of the line that is the heading `title`: its letters and digits end
+/// with the title's, with at most a section number before them.
+pub fn heading_line(lines: &[&str], title: &str) -> Option<usize> {
+    let want = compact(unnumbered(title));
+    if want.is_empty() {
+        return None;
+    }
+    let i = lines.iter().position(|line| {
+        let have = compact(line);
+        have.ends_with(&want) && have.len() <= want.len() + 8
+    })?;
+    // Poppler may put the section number on its own line just before, with a
+    // blank line between.
+    let prev = (0..i).rev().find(|&j| !lines[j].trim().is_empty());
+    let number =
+        prev.filter(|&j| i - j <= 2 && unnumbered(&format!("{} x", lines[j].trim())) == "x");
+    Some(number.unwrap_or(i))
+}
+
 /// Bookmarks worth trusting: at least two, not mostly page labels such as
 /// `Page 3` or bare numbers, and not all on one page of a longer PDF.
 pub fn useful(bookmarks: &[OutlineEntry], pages: u32) -> bool {
@@ -392,6 +483,37 @@ mod tests {
             words,
             blocks,
         }
+    }
+
+    #[test]
+    fn section_runs_to_next_entry_at_same_level() {
+        let entry = |level, title: &str, page| OutlineEntry {
+            level,
+            title: title.into(),
+            page,
+        };
+        let entries = [
+            entry(1, "1 Introduction", 1),
+            entry(1, "2 Method", 2),
+            entry(2, "2.1 Setup", 3),
+            entry(1, "3 Results", 5),
+        ];
+        let method = section(&entries, "method", 9).unwrap();
+        assert_eq!((method.first, method.last), (2, 5));
+        assert_eq!(method.next.as_deref(), Some("3 Results"));
+        let setup = section(&entries, "2.1", 9).unwrap();
+        assert_eq!((setup.title.as_str(), setup.last), ("2.1 Setup", 5));
+        assert_eq!(section(&entries, "Results", 9).unwrap().last, 9);
+        assert!(section(&entries, "Discussion", 9).is_none());
+        let lines = ["text", "I. I NTRODUCTION", "more"];
+        assert_eq!(heading_line(&lines, "Introduction"), Some(1));
+        assert_eq!(
+            heading_line(&["text", "1.1", "Setup"], "2.1 Setup"),
+            Some(1)
+        );
+        assert_eq!(unnumbered("IV. Validation"), "Validation");
+        assert_eq!(unnumbered("Validation"), "Validation");
+        assert_eq!(unnumbered("2.1 Setup"), "Setup");
     }
 
     #[test]

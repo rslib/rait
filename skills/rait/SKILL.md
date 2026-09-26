@@ -8,7 +8,8 @@ description: Read, search and transform local PDF, DOCX, PPTX, EPUB and HTML fil
 Read and transform local PDFs, documents, tables, images, archives and media for coding agents. Output is TOON by default.
 
 - Run `rait pdf info <file>...` for page counts and titles, and `rait pdf outline <file>` for the table of contents with pages; without bookmarks the headings are guessed, so check them.
-- Run `rait pdf text <file> --pages <range>` to read text; detected tables appear as Markdown tables, narrow --pages or lower --max-chars to save context.
+- Run `rait pdf text <file> --pages <range>` to read text, or `--section <title>` for one section from the outline; detected tables appear as Markdown tables, narrow --pages or lower --max-chars to save context.
+- Run `rait search <file>... "<query>"` to find which PDFs, documents, notebooks or tables mention something (-i ignores case); hits give the page, part or row to read next.
 - Run `rait pdf tables <file>` or `rait doc tables <file>` for tables as rows keyed by their header; PDF tables are detected, so check odd results with `rait pdf text <file> --layout`.
 - Run `rait models fetch` once to install the table models; PDF table detection uses them automatically and falls back to a heuristic without them.
 - Run `rait pdf search <file>... "<query>"` to find lines (-i ignores case), then read hit pages with `rait pdf text <file> --pages <page>`.

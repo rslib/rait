@@ -200,6 +200,24 @@ pub fn schema(path: &Path, sheet: Option<&str>) -> Result<Schema, ErrorInfo> {
     })
 }
 
+/// Every data row of one sheet in order, streamed: `visit` gets the 1-based
+/// row number, the header and the cells, and returns false to stop.
+pub fn scan(
+    path: &Path,
+    sheet: Option<&str>,
+    mut visit: impl FnMut(u64, &[String], &[Value]) -> bool,
+) -> Result<(), ErrorInfo> {
+    let format = format_of(path)?;
+    let table = open(path, format, sheet)?;
+    for (i, row) in table.rows.enumerate() {
+        let row = row.map_err(|detail| unreadable(format, detail))?;
+        if !visit(i as u64 + 1, &table.header, &row) {
+            break;
+        }
+    }
+    Ok(())
+}
+
 pub fn rows(req: &RowsRequest) -> Result<Rows, ErrorInfo> {
     let format = format_of(&req.path)?;
     let table = open(&req.path, format, req.sheet.as_deref())?;

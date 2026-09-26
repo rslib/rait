@@ -52,6 +52,7 @@ fn extracts_fixture_text() {
         layout: false,
         tables: true,
         detector: DetectorChoice::Heuristic,
+        section: None,
     };
     let text = rait_pdf::text(&req).unwrap();
     assert_eq!(text.pages.len(), 1);
@@ -188,6 +189,7 @@ fn text_inlines_tables_unless_disabled() {
         layout: false,
         tables,
         detector: DetectorChoice::Heuristic,
+        section: None,
     };
     let with = rait_pdf::text(&req(true)).unwrap();
     assert_eq!(with.tables, 1);
@@ -328,4 +330,24 @@ fn figures_are_cropped_above_or_below_their_caption() {
     }
     let again = rait_pdf::figures(&req).unwrap_err();
     assert_eq!(again.code, ErrorCode::OutputExists);
+}
+
+#[test]
+fn text_reads_one_section_by_title() {
+    let req = |section: &str| rait_pdf::TextRequest {
+        path: figures_fixture(),
+        pages: PageRange::parse(None).unwrap(),
+        layout: false,
+        tables: false,
+        detector: DetectorChoice::Heuristic,
+        section: Some(section.into()),
+    };
+    let method = rait_pdf::text(&req("method details")).unwrap();
+    assert_eq!(method.section.as_deref(), Some("Method details"));
+    let text = &method.pages[0].text;
+    assert!(text.starts_with("1.1"), "{text}");
+    assert!(text.contains("More prose follows"));
+    assert!(!text.contains("Results"));
+    let err = rait_pdf::text(&req("Discussion")).unwrap_err();
+    assert!(err.message.contains("Introduction"));
 }

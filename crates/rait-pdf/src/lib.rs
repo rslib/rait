@@ -84,6 +84,9 @@ pub struct TextRequest {
     /// Replace detected tables with Markdown tables. Ignored with `layout`.
     pub tables: bool,
     pub detector: DetectorChoice,
+    /// Read only the section with this title from the outline; overrides
+    /// `pages`.
+    pub section: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -163,6 +166,9 @@ pub struct PdfText {
     /// Absent when table detection did not run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detector: Option<Detector>,
+    /// The outline title of the section read with `section`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     pub pages: Vec<PageText>,
     #[serde(skip)]
     pub warnings: Vec<String>,
@@ -246,8 +252,15 @@ fn parse_page_size(value: &str) -> Option<PageSizePoints> {
 
 pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
     let info = info(&req.path)?;
-    let (first, last) = req.pages.bounds(info.pages, "--pages")?;
     let mut warnings = info.warnings;
+    let section = match &req.section {
+        Some(name) => Some(find_section(&req.path, name, info.pages, &mut warnings)?),
+        None => None,
+    };
+    let (first, last) = match &section {
+        Some(s) => (s.first, s.last),
+        None => req.pages.bounds(info.pages, "--pages")?,
+    };
     let text = extract(&req.path, first, last, req.layout, &mut warnings)?;
     let mut pages: Vec<PageText> = (first..=last)
         .zip(text.split_terminator(PAGE_BREAK))
@@ -276,14 +289,72 @@ pub fn text(req: &TextRequest) -> Result<PdfText, ErrorInfo> {
                 .into(),
         );
     }
+    if let Some(section) = &section {
+        trim_section(&mut pages, section);
+    }
     Ok(PdfText {
-        range: req.pages.to_string(),
+        range: match &section {
+            Some(s) if s.first == s.last => s.first.to_string(),
+            Some(s) => format!("{}-{}", s.first, s.last),
+            None => req.pages.to_string(),
+        },
         total_pages: info.pages,
         tables: table_count,
         detector,
+        section: section.map(|s| s.title),
         pages,
         warnings,
     })
+}
+
+fn find_section(
+    path: &Path,
+    name: &str,
+    pages: u32,
+    warnings: &mut Vec<String>,
+) -> Result<outline::Section, ErrorInfo> {
+    let found = outline(path, false)?;
+    warnings.extend(found.warnings);
+    outline::section(&found.entries, name, pages).ok_or_else(|| {
+        let titles: Vec<&str> = found
+            .entries
+            .iter()
+            .take(12)
+            .map(|e| e.title.as_str())
+            .collect();
+        let listed = if titles.is_empty() {
+            "The PDF has no outline.".to_string()
+        } else {
+            format!("Sections include: {}.", titles.join("; "))
+        };
+        ErrorInfo::new(
+            ErrorCode::InvalidInput,
+            format!("No section matches `{name}`. {listed}"),
+            "Run `rait pdf outline <file>` to list sections, or read pages with --pages."
+                .to_string(),
+        )
+    })
+}
+
+/// Drop the text before the section's heading on its first page and from the
+/// next section's heading on its last page. A heading not found in the text
+/// leaves that page whole.
+fn trim_section(pages: &mut [PageText], section: &outline::Section) {
+    if let Some(first) = pages.first_mut() {
+        let lines: Vec<&str> = first.text.lines().collect();
+        if let Some(i) = outline::heading_line(&lines, &section.title) {
+            first.text = lines[i..].join("\n");
+        }
+    }
+    let Some(next) = &section.next else { return };
+    if let Some(last) = pages.last_mut() {
+        let lines: Vec<&str> = last.text.lines().collect();
+        // On a one-page section, the next heading comes after this one.
+        let skip = usize::from(section.first == section.last);
+        if let Some(i) = outline::heading_line(&lines[skip.min(lines.len())..], next) {
+            last.text = lines[..i + skip].join("\n");
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

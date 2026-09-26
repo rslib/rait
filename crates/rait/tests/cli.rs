@@ -749,3 +749,59 @@ fn pdf_tables_without_model_uses_heuristic_and_hints_fetch() {
     assert_eq!(forced.status.code(), Some(1));
     assert!(stdout(&forced).contains("rait models fetch"));
 }
+
+#[test]
+fn search_locates_hits_in_every_format() {
+    let files = ["sample.docx", "sample.ipynb", "sample.sqlite", "sample.csv"].map(fixture);
+    let mut args = vec!["--format", "json", "search"];
+    args.extend(files.iter().map(String::as_str));
+    args.push("EU");
+    let records = json(&run(&args));
+    let at = |i: usize| {
+        records[i]["data"]["hits"][0]["at"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(at(0), "part 2");
+    assert_eq!(at(1), "part 2");
+    assert_eq!(at(2), "sales row 1");
+    assert_eq!(at(3), "row 1");
+    let bad = run(&["search", &fixture("photo.jpg"), "EU"]);
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(stdout(&bad).contains("Search reads PDF"));
+}
+
+#[test]
+fn pdf_text_section_conflicts_with_pages() {
+    let out = run(&[
+        "pdf",
+        "text",
+        &fixture("figures.pdf"),
+        "--section",
+        "Results",
+        "--pages",
+        "1",
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    if !has("pdftotext") {
+        return;
+    }
+    let out = run(&[
+        "--format",
+        "json",
+        "pdf",
+        "text",
+        &fixture("figures.pdf"),
+        "--section",
+        "Results",
+    ]);
+    let data = &json(&out)[0]["data"];
+    assert_eq!(data["section"], "Results");
+    assert!(
+        data["pages"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("closes the document")
+    );
+}
