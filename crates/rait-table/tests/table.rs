@@ -179,4 +179,103 @@ fn bad_inputs_are_typed_errors() {
     })
     .unwrap();
     assert_eq!((got.total_rows, got.range.as_str()), (0, "none"));
+    let broken_db = dir.path().join("broken.db");
+    std::fs::write(&broken_db, "not a database").unwrap();
+    let err = info(&broken_db).unwrap_err();
+    assert_eq!(err.code, ErrorCode::InvalidInput);
+}
+
+#[test]
+fn sqlite_lists_tables_and_views_with_counts() {
+    let book = info(&fixture("sample.sqlite")).unwrap();
+    assert_eq!(book.format, Format::Sqlite);
+    let sheets: Vec<(&str, u64, usize)> = book
+        .sheets
+        .iter()
+        .map(|s| (s.sheet.as_str(), s.rows, s.columns))
+        .collect();
+    assert_eq!(
+        sheets,
+        [
+            ("sales", 3, 4),
+            ("notes", 2, 2),
+            ("big_sales", 2, 4),
+            ("weird \"quoted\" table", 1, 2),
+        ]
+    );
+}
+
+#[test]
+fn sqlite_reports_declared_column_types() {
+    let schema = schema(&fixture("sample.sqlite"), Some("sales")).unwrap();
+    let types: Vec<(&str, &str)> = schema
+        .columns
+        .iter()
+        .map(|c| (c.column.as_str(), c.kind.as_str()))
+        .collect();
+    assert_eq!(
+        types,
+        [
+            ("id", "int"),
+            ("amount, usd", "float"),
+            ("region", "string"),
+            ("note text", "string"),
+        ]
+    );
+    assert_eq!(schema.columns[3].empty, 1);
+}
+
+#[test]
+fn sqlite_selects_rows_range_and_columns() {
+    let got = rows(&RowsRequest {
+        sheet: Some("sales".into()),
+        rows: Some(PageRange::Range(2, 3)),
+        columns: vec!["region".into(), "note text".into()],
+        ..request("sample.sqlite")
+    })
+    .unwrap();
+    assert_eq!(got.range, "2-3");
+    assert_eq!(
+        Value::Object(got.rows[0].clone()),
+        json!({"region": "US", "note text": null})
+    );
+    assert_eq!(
+        Value::Object(got.rows[1].clone()),
+        json!({"region": "APAC", "note text": "row 3"})
+    );
+}
+
+#[test]
+fn sqlite_blob_becomes_a_placeholder() {
+    let got = rows(&RowsRequest {
+        sheet: Some("notes".into()),
+        ..request("sample.sqlite")
+    })
+    .unwrap();
+    assert_eq!(got.rows[0]["payload"], json!("<blob 9 bytes>"));
+    assert_eq!(got.rows[1]["payload"], Value::Null);
+}
+
+#[test]
+fn sqlite_quotes_table_identifiers_needing_it() {
+    let got = rows(&RowsRequest {
+        sheet: Some("weird \"quoted\" table".into()),
+        ..request("sample.sqlite")
+    })
+    .unwrap();
+    assert_eq!(got.sheet, "weird \"quoted\" table");
+    assert_eq!(
+        Value::Object(got.rows[0].clone()),
+        json!({"id": 1, "label": "hi"})
+    );
+}
+
+#[test]
+fn sqlite_view_is_selectable_like_a_table() {
+    let got = rows(&RowsRequest {
+        sheet: Some("big_sales".into()),
+        ..request("sample.sqlite")
+    })
+    .unwrap();
+    assert_eq!(got.total_rows, 2);
 }

@@ -2,6 +2,7 @@ mod cells;
 mod columnar;
 mod delimited;
 mod sheet;
+mod sqlite;
 
 use rait_core::{ErrorCode, ErrorInfo, PageRange, check_input};
 use serde::Serialize;
@@ -14,7 +15,7 @@ pub const DEFAULT_ROWS: u64 = 20;
 pub const SAMPLE_ROWS: u64 = 10_000;
 
 pub const EXTENSIONS: &[&str] = &[
-    "csv", "tsv", "xlsx", "xlsm", "xlsb", "xls", "ods", "parquet",
+    "csv", "tsv", "xlsx", "xlsm", "xlsb", "xls", "ods", "parquet", "db", "sqlite", "sqlite3", "db3",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
@@ -26,6 +27,7 @@ pub enum Format {
     Xls,
     Ods,
     Parquet,
+    Sqlite,
 }
 
 impl Format {
@@ -38,12 +40,15 @@ impl Format {
             "xls" => Some(Self::Xls),
             "ods" => Some(Self::Ods),
             "parquet" => Some(Self::Parquet),
+            "db" | "sqlite" | "sqlite3" | "db3" => Some(Self::Sqlite),
             _ => None,
         }
     }
 
+    /// Tables/views are listed like workbook sheets, and picking one when
+    /// `--sheet` is not given follows the same rule.
     fn is_workbook(self) -> bool {
-        matches!(self, Self::Xlsx | Self::Xls | Self::Ods)
+        matches!(self, Self::Xlsx | Self::Xls | Self::Ods | Self::Sqlite)
     }
 
     fn name(self) -> &'static str {
@@ -54,6 +59,7 @@ impl Format {
             Self::Xls => "Excel 97 workbook",
             Self::Ods => "OpenDocument spreadsheet",
             Self::Parquet => "Parquet file",
+            Self::Sqlite => "SQLite database",
         }
     }
 }
@@ -139,7 +145,9 @@ pub struct Rows {
 
 pub fn info(path: &Path) -> Result<TableInfo, ErrorInfo> {
     let format = format_of(path)?;
-    let sheets = if format.is_workbook() {
+    let sheets = if format == Format::Sqlite {
+        sqlite::info(path).map_err(|detail| unreadable(format, detail))?
+    } else if format.is_workbook() {
         sheet::info(path).map_err(|detail| unreadable(format, detail))?
     } else {
         let table = open(path, format, None)?;
@@ -267,6 +275,11 @@ fn open(path: &Path, format: Format, sheet: Option<&str>) -> Result<Table, Error
             let name = pick_sheet(&names, sheet)?;
             sheet::open(path, name).map_err(unreadable)?
         }
+        Format::Sqlite => {
+            let names = sqlite::names(path).map_err(unreadable)?;
+            let name = pick_sheet(&names, sheet)?;
+            sqlite::open(path, name).map_err(unreadable)?
+        }
     };
     Ok(table)
 }
@@ -281,7 +294,7 @@ fn format_of(path: &Path) -> Result<Format, ErrorInfo> {
         ErrorInfo::new(
             ErrorCode::InvalidInput,
             format!("Files {ext} are not supported."),
-            "Use .csv, .tsv, .xlsx, .xls, .ods or .parquet.".to_string(),
+            "Use .csv, .tsv, .xlsx, .xls, .ods, .parquet or .sqlite.".to_string(),
         )
     })
 }
