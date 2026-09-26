@@ -1518,7 +1518,7 @@ fn unique_stems(files: &[PathBuf]) -> Result<(), ErrorInfo> {
 }
 
 const MODEL_HINT: &str =
-    "Run `rait models fetch` to install the table model; it finds tables the heuristic misses";
+    "Run `rait models fetch` to install the table models; they find tables the heuristic misses";
 
 fn used_heuristic(records: &[Record]) -> bool {
     records.iter().any(|r| {

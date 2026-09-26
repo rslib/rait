@@ -8,7 +8,6 @@ use candle_core::{Result, Tensor};
 use candle_nn::VarBuilder;
 
 const LAYERS: usize = 6;
-const QUERIES: usize = 15;
 
 /// A convolution with its batch norm folded in, run as im2col + one matrix
 /// multiply: (O, C*k*k) x (C*k*k, Hout*Wout) is already NCHW.
@@ -261,13 +260,16 @@ pub(crate) struct Tatr {
     encoder_norm: Norm,
     decoder: Vec<DecoderLayer>,
     decoder_norm: Norm,
+    /// Number of object queries: 15 for detection, 125 for structure.
+    n_queries: usize,
     queries: Vec<f32>,
     classifier: Dense,
     bbox: Vec<Dense>,
 }
 
 impl Tatr {
-    pub(crate) fn new(vb: VarBuilder) -> Result<Self> {
+    /// `classes` counts the labels plus "no object".
+    pub(crate) fn new(vb: VarBuilder, n_queries: usize, classes: usize) -> Result<Self> {
         let m = vb.pp("model");
         let encoder = (0..LAYERS)
             .map(|i| {
@@ -299,10 +301,11 @@ impl Tatr {
             decoder,
             decoder_norm: Norm::load(m.pp("decoder.layernorm"))?,
             queries: m
-                .get((QUERIES, D_MODEL), "query_position_embeddings.weight")?
+                .get((n_queries, D_MODEL), "query_position_embeddings.weight")?
                 .flatten_all()?
                 .to_vec1()?,
-            classifier: Dense::load(vb.pp("class_labels_classifier"), D_MODEL, 3, 1.0)?,
+            n_queries,
+            classifier: Dense::load(vb.pp("class_labels_classifier"), D_MODEL, classes, 1.0)?,
             bbox: (0..3)
                 .map(|i| {
                     Dense::load(
@@ -316,8 +319,8 @@ impl Tatr {
         })
     }
 
-    /// `pixels`: (1, 3, H, W), normalized. Returns logits (15 x 3) and boxes
-    /// (15 x 4, cx cy w h relative to the image).
+    /// `pixels`: (1, 3, H, W), normalized. Returns logits (queries x classes)
+    /// and boxes (queries x 4, cx cy w h relative to the image).
     pub(crate) fn forward(&self, pixels: &Tensor) -> Result<(Vec<f32>, Vec<f32>)> {
         let features = self.backbone.forward(pixels)?;
         let features = self.projection.forward(&features, false, None)?;
@@ -340,22 +343,23 @@ impl Tatr {
         }
         let memory = self.encoder_norm.run(&x);
         let keys = add(&memory, &pos);
-        let mut y = vec![0f32; QUERIES * D_MODEL];
+        let n = self.n_queries;
+        let mut y = vec![0f32; n * D_MODEL];
         for layer in &self.decoder {
             let hdn = layer.self_norm.run(&y);
             let qk = add(&hdn, &self.queries);
-            y = layer.self_attn.run(&qk, QUERIES, &qk, &hdn, QUERIES, &y);
+            y = layer.self_attn.run(&qk, n, &qk, &hdn, n, &y);
             let hdn = layer.cross_norm.run(&y);
             let q = add(&hdn, &self.queries);
-            y = layer.cross_attn.run(&q, QUERIES, &keys, &memory, len, &y);
-            y = layer.ffn.run(&y, QUERIES);
+            y = layer.cross_attn.run(&q, n, &keys, &memory, len, &y);
+            y = layer.ffn.run(&y, n);
         }
         let y = self.decoder_norm.run(&y);
-        let logits = self.classifier.run(&y, QUERIES, Act::None);
-        let b = self.bbox[0].run(&y, QUERIES, Act::Relu);
-        let b = self.bbox[1].run(&b, QUERIES, Act::Relu);
+        let logits = self.classifier.run(&y, n, Act::None);
+        let b = self.bbox[0].run(&y, n, Act::Relu);
+        let b = self.bbox[1].run(&b, n, Act::Relu);
         let boxes = self.bbox[2]
-            .run(&b, QUERIES, Act::None)
+            .run(&b, n, Act::None)
             .into_iter()
             .map(|v| 1.0 / (1.0 + (-v).exp()))
             .collect();

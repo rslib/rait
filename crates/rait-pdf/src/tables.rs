@@ -31,7 +31,7 @@ const PROSE_LINE_WIDTH: f64 = 0.35;
 /// the table, whatever the page's text height.
 const PITCH_JUMP: f64 = 2.0;
 /// Slack around a model's table box, in points, for words its box clips.
-const REGION_MARGIN: f64 = 4.0;
+pub(crate) const REGION_MARGIN: f64 = 4.0;
 /// How far past a caption's ends, in text heights, its table's columns can reach.
 const CAPTION_SLACK: f64 = 2.0;
 /// How far, in text heights, a `Table N` caption can sit from its table.
@@ -108,13 +108,8 @@ pub fn detect(page: &Page) -> Vec<Table> {
 /// Tables inside regions a vision model found, as (x0, y0, x1, y1) in PDF
 /// points. Each region must still hold a grid of cells to count.
 pub fn detect_in(page: &Page, regions: &[[f64; 4]]) -> Vec<Table> {
-    let mut kept: Vec<[f64; 4]> = vec![];
     let mut tables = vec![];
-    for &region in regions {
-        if kept.iter().any(|k| overlap(k, &region) > 0.5) {
-            continue;
-        }
-        kept.push(region);
+    for region in distinct(regions) {
         let [x0, y0, x1, y1] = region;
         let margin = REGION_MARGIN;
         let inside: Vec<usize> = (0..page.words.len())
@@ -168,7 +163,7 @@ pub fn detect_in(page: &Page, regions: &[[f64; 4]]) -> Vec<Table> {
 
 /// Most words taller than wide: a table turned on its side, as in a
 /// landscape table on a portrait page.
-fn sideways(words: &[Word]) -> bool {
+pub(crate) fn sideways(words: &[Word]) -> bool {
     let long: Vec<&Word> = words
         .iter()
         .filter(|w| w.text.chars().count() >= 3)
@@ -189,6 +184,17 @@ fn turn(word: &Word, page_height: f64) -> Word {
         y1: word.x1,
         ..word.clone()
     }
+}
+
+/// Regions without those that mostly overlap an earlier one.
+pub fn distinct(regions: &[[f64; 4]]) -> Vec<[f64; 4]> {
+    let mut kept: Vec<[f64; 4]> = vec![];
+    for &region in regions {
+        if !kept.iter().any(|k| overlap(k, &region) > 0.5) {
+            kept.push(region);
+        }
+    }
+    kept
 }
 
 /// Share of the smaller box covered by the intersection.
@@ -251,6 +257,39 @@ fn detect_with(page: &Page, mode: Mode) -> Vec<Table> {
         .flat_map(|draft| split_by_captions(draft, &captions, height, words))
         .filter(|table| plausible(&table.rows, mode))
         .collect()
+}
+
+/// A `Table N` caption above the table: the table starts there rather than
+/// continuing from the previous page, since a continuation opens its page.
+// ponytail: captions below a table are ignored, since one there may belong to
+// the next table; a new table captioned below, at the top of a page, under the
+// same header as the previous page's last table, is joined by mistake.
+pub fn has_caption(page: &Page, table: &Table) -> bool {
+    let ids: Vec<usize> = table
+        .words
+        .iter()
+        .copied()
+        .filter(|&i| i < page.words.len())
+        .collect();
+    if ids.is_empty() {
+        return false;
+    }
+    let inside: Vec<Word> = ids.iter().map(|&i| page.words[i].clone()).collect();
+    let turned;
+    let page = if sideways(&inside) {
+        turned = Page {
+            words: page.words.iter().map(|w| turn(w, page.height)).collect(),
+            ..page.clone()
+        };
+        &turned
+    } else {
+        page
+    };
+    let top = ids
+        .iter()
+        .map(|&i| page.words[i].y0)
+        .fold(f64::MAX, f64::min);
+    captions(page).iter().any(|c| c.y0 < top)
 }
 
 fn captions(page: &Page) -> Vec<Caption> {
@@ -371,6 +410,11 @@ fn to_table(segment: Vec<(Vec<String>, Vec<usize>)>) -> Table {
         })
         .collect();
     Table { rows, words }
+}
+
+/// [`plausible`] for a grid inside a region a model found.
+pub fn plausible_region(rows: &[Vec<String>]) -> bool {
+    plausible(rows, Mode::Region)
 }
 
 /// Final checks that separate tables from grids of other text: a header of

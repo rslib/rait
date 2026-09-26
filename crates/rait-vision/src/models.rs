@@ -43,7 +43,19 @@ pub const TATR: ModelSpec = ModelSpec {
     file: "tatr-2357cbe.safetensors",
 };
 
-pub const MODELS: &[ModelSpec] = &[TATR];
+/// Table Transformer structure weights v1.1
+/// (microsoft/table-transformer-structure-recognition-v1.1-all).
+pub const TATR_STRUCTURE: ModelSpec = ModelSpec {
+    name: "tatr-structure",
+    purpose: "rows, columns and header cells inside detected tables",
+    license: "MIT",
+    url: "https://huggingface.co/microsoft/table-transformer-structure-recognition-v1.1-all/resolve/7587a7ef111d9dcbf8ac695f1376ab7014340a0c/model.safetensors",
+    sha256: "9df416575a3a36ebd0129342d4f597f14d6e5170268f3d52d28584ab4466a501",
+    bytes: 115_437_156,
+    file: "tatr-structure-7587a7e.safetensors",
+};
+
+pub const MODELS: &[ModelSpec] = &[TATR, TATR_STRUCTURE];
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ModelStatus {

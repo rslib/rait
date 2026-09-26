@@ -2,6 +2,7 @@ mod detect;
 mod fallback;
 mod files;
 mod layout;
+mod structure;
 mod tables;
 
 pub use detect::{Detector, DetectorChoice};
@@ -93,6 +94,10 @@ pub struct TablesRequest {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FoundTable {
     pub page: u32,
+    /// Last page of a table that continues over the next pages under the same
+    /// header. Absent for a table on one page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_page: Option<u32>,
     /// 1-based position among the tables found in the selected pages.
     pub table: u32,
     pub rows: Vec<serde_json::Map<String, serde_json::Value>>,
@@ -286,16 +291,16 @@ pub fn tables(req: &TablesRequest) -> Result<PdfTables, ErrorInfo> {
     let mut warnings = info.warnings;
     let (detected, detector) =
         detect::find(&req.path, first, &layouts, req.detector, &mut warnings)?;
-    let mut found = vec![];
-    for (page, tables) in (first..).zip(detected) {
-        for table in tables {
-            found.push(FoundTable {
-                page,
-                table: found.len() as u32 + 1,
-                rows: rait_core::cells::keyed(&table.rows),
-            });
-        }
-    }
+    let found = join_pages(first, &layouts, detected)
+        .into_iter()
+        .enumerate()
+        .map(|(i, (page, end, rows))| FoundTable {
+            page,
+            end_page: (end != page).then_some(end),
+            table: i as u32 + 1,
+            rows: rait_core::cells::keyed(&rows),
+        })
+        .collect();
     Ok(PdfTables {
         range: req.pages.to_string(),
         total_pages: info.pages,
@@ -303,6 +308,35 @@ pub fn tables(req: &TablesRequest) -> Result<PdfTables, ErrorInfo> {
         tables: found,
         warnings,
     })
+}
+
+/// Tables as (first page, last page, rows). A page's first table continues the
+/// previous page's last table when their headers match and it has no caption
+/// of its own, as a long table repeats its header on each page.
+// ponytail: continuations that do not repeat the header stay separate tables.
+fn join_pages(
+    first: u32,
+    layouts: &[layout::Page],
+    detected: Vec<Vec<tables::Table>>,
+) -> Vec<(u32, u32, Vec<Vec<String>>)> {
+    let mut joined: Vec<(u32, u32, Vec<Vec<String>>)> = vec![];
+    for ((page, layout), tables) in (first..).zip(layouts).zip(detected) {
+        for (i, table) in tables.into_iter().enumerate() {
+            match joined.last_mut() {
+                Some(prev)
+                    if i == 0
+                        && prev.1 + 1 == page
+                        && prev.2[0] == table.rows[0]
+                        && !tables::has_caption(layout, &table) =>
+                {
+                    prev.2.extend(table.rows.into_iter().skip(1));
+                    prev.1 = page;
+                }
+                _ => joined.push((page, page, table.rows)),
+            }
+        }
+    }
+    joined
 }
 
 fn bbox(path: &Path, first: u32, last: u32) -> Result<Vec<layout::Page>, ErrorInfo> {

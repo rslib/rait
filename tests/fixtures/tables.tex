@@ -6,6 +6,7 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{multicol}
+\usepackage{longtable}
 
 % Reproducible output: no embedded build date/time or trailer id.
 \pdfinfoomitdate=1
@@ -133,5 +134,106 @@ Compression  & LZ4     \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\newpage
+% Page 5 and 6: a long table that continues onto the next page under a
+% repeated header, then a separate captioned table with the same header.
+\begin{longtable}{l r r}
+\caption{Per-node throughput.}\\
+\toprule
+Node & Requests & Errors \\
+\midrule
+\endfirsthead
+\toprule
+Node & Requests & Errors \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+node01 & 107 & 47 \\
+node02 & 114 & 84 \\
+node03 & 121 & 31 \\
+node04 & 128 & 68 \\
+node05 & 135 & 15 \\
+node06 & 142 & 52 \\
+node07 & 149 & 89 \\
+node08 & 156 & 36 \\
+node09 & 163 & 73 \\
+node10 & 170 & 20 \\
+node11 & 177 & 57 \\
+node12 & 184 & 94 \\
+node13 & 191 & 41 \\
+node14 & 198 & 78 \\
+node15 & 205 & 25 \\
+node16 & 212 & 62 \\
+node17 & 219 & 99 \\
+node18 & 226 & 46 \\
+node19 & 233 & 83 \\
+node20 & 240 & 30 \\
+node21 & 247 & 67 \\
+node22 & 254 & 14 \\
+node23 & 261 & 51 \\
+node24 & 268 & 88 \\
+node25 & 275 & 35 \\
+node26 & 282 & 72 \\
+node27 & 289 & 19 \\
+node28 & 296 & 56 \\
+node29 & 303 & 93 \\
+node30 & 310 & 40 \\
+node31 & 317 & 77 \\
+node32 & 324 & 24 \\
+node33 & 331 & 61 \\
+node34 & 338 & 98 \\
+node35 & 345 & 45 \\
+node36 & 352 & 82 \\
+node37 & 359 & 29 \\
+node38 & 366 & 66 \\
+node39 & 373 & 13 \\
+node40 & 380 & 50 \\
+node41 & 387 & 87 \\
+node42 & 394 & 34 \\
+node43 & 401 & 71 \\
+node44 & 408 & 18 \\
+node45 & 415 & 55 \\
+node46 & 422 & 92 \\
+node47 & 429 & 39 \\
+node48 & 436 & 76 \\
+node49 & 443 & 23 \\
+node50 & 450 & 60 \\
+node51 & 457 & 97 \\
+node52 & 464 & 44 \\
+node53 & 471 & 81 \\
+node54 & 478 & 28 \\
+node55 & 485 & 65 \\
+node56 & 492 & 12 \\
+node57 & 499 & 49 \\
+node58 & 506 & 86 \\
+node59 & 513 & 33 \\
+node60 & 520 & 70 \\
+node61 & 527 & 17 \\
+node62 & 534 & 54 \\
+node63 & 541 & 91 \\
+node64 & 548 & 38 \\
+node65 & 555 & 75 \\
+node66 & 562 & 22 \\
+node67 & 569 & 59 \\
+node68 & 576 & 96 \\
+node69 & 583 & 43 \\
+node70 & 590 & 80 \\
+\end{longtable}
+
+\begin{table}[h]
+\centering
+\caption{Throughput after the upgrade.}
+\begin{tabular}{l r r}
+\toprule
+Node & Requests & Errors \\
+\midrule
+node01 & 220 & 3 \\
+node02 & 230 & 1 \\
+node03 & 240 & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \end{document}

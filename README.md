@@ -36,13 +36,13 @@ help[2]:
 rait pdf tables tests/fixtures/tables.pdf --pages 1
 ```
 
-PDF table detection is better with the table model. Install it once (115 MB, MIT):
+PDF table detection is better with the table models. Install them once (two files of 115 MB each, MIT):
 
 ```sh
 rait models fetch
 ```
 
-With the model, [Table Transformer](https://huggingface.co/microsoft/table-transformer-detection) finds table regions on the rendered page and word positions give the cells. It runs inside RAIT, in pure Rust with no ML runtime. Without it, a heuristic finds tables from aligned gaps between words. Each result says which `detector` ran; `--detector model|heuristic` picks one.
+With the models, [Table Transformer](https://huggingface.co/microsoft/table-transformer-detection) finds table regions on the rendered page, its [structure model](https://huggingface.co/microsoft/table-transformer-structure-recognition-v1.1-all) finds the rows, columns, header and spanning cells in each table, and the PDF's words fill the cells. They run inside RAIT, in pure Rust with no ML runtime. Without them, a heuristic finds tables from aligned gaps between words. Each result says which `detector` ran; `--detector model|heuristic` picks one. A table that continues over several pages under a repeated header comes back as one table with an `end_page`.
 
 Read a document as Markdown, one part per section, slide or chapter:
 

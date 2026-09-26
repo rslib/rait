@@ -1,12 +1,15 @@
 //! Choosing the table detector: Table Transformer regions when the model is
-//! installed, the geometry heuristic otherwise.
+//! installed, the geometry heuristic otherwise. Inside each region the
+//! structure model gives rows and columns when it is installed; otherwise the
+//! gaps between words do.
 
 use crate::layout::Page;
+use crate::structure;
 use crate::tables::{self, Table};
 use crate::{PDFTOPPM, backend_error};
 use rait_core::exec::{self, ExecError};
 use rait_core::{ErrorCode, ErrorInfo};
-use rait_vision::{INPUT_SIZE, TableDetector, models};
+use rait_vision::{INPUT_SIZE, STRUCTURE_SIZE, TableDetector, TableStructure, models};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::ffi::OsString;
@@ -36,6 +39,25 @@ static TATR: OnceLock<Result<TableDetector, ErrorInfo>> = OnceLock::new();
 fn tatr() -> Option<&'static Result<TableDetector, ErrorInfo>> {
     let path = models::installed(&models::TATR)?;
     Some(TATR.get_or_init(|| TableDetector::load(&path)))
+}
+
+static STRUCTURE: OnceLock<Result<TableStructure, ErrorInfo>> = OnceLock::new();
+
+/// Points added around a table before cropping it for the structure model.
+const CROP_PAD: f64 = 8.0;
+/// Highest resolution for a table crop. Small tables stay small instead of
+/// being blown up to [`STRUCTURE_SIZE`]; the structure model reads text at
+/// the size it was trained on better.
+const MAX_CROP_DPI: f64 = 200.0;
+
+// ponytail: a structure model that fails to load falls back to word gaps
+// silently; warn if that ever happens in practice.
+fn structure() -> Option<&'static TableStructure> {
+    let path = models::installed(&models::TATR_STRUCTURE)?;
+    STRUCTURE
+        .get_or_init(|| TableStructure::load(&path))
+        .as_ref()
+        .ok()
 }
 
 /// Tables for each page in `layouts`, which start at page `first`.
@@ -78,7 +100,8 @@ pub fn find(
         .par_iter()
         .enumerate()
         .map(|(i, page)| {
-            let (width, height, rgb) = render(path, first + i as u32)?;
+            let number = first + i as u32;
+            let (width, height, rgb) = render(path, number)?;
             let regions = model.detect(&rgb, width, height)?;
             let boxes: Vec<[f64; 4]> = regions
                 .iter()
@@ -91,7 +114,18 @@ pub fn find(
                     ]
                 })
                 .collect();
-            Ok(tables::detect_in(page, &boxes))
+            let mut found = vec![];
+            for region in tables::distinct(&boxes) {
+                let table = match structure() {
+                    Some(model) => structured(path, number, page, region, model)?,
+                    None => None,
+                };
+                match table {
+                    Some(table) => found.push(table),
+                    None => found.extend(tables::detect_in(page, &[region])),
+                }
+            }
+            Ok(found)
         })
         .collect();
     match found {
@@ -104,9 +138,66 @@ pub fn find(
     }
 }
 
+/// The table in `region` (page points) from its rows and columns.
+fn structured(
+    path: &Path,
+    number: u32,
+    page: &Page,
+    region: [f64; 4],
+    model: &TableStructure,
+) -> Result<Option<Table>, ErrorInfo> {
+    let [x0, y0] = [
+        (region[0] - CROP_PAD).max(0.0),
+        (region[1] - CROP_PAD).max(0.0),
+    ];
+    let [x1, y1] = [
+        (region[2] + CROP_PAD).min(page.width),
+        (region[3] + CROP_PAD).min(page.height),
+    ];
+    let side = (x1 - x0).max(y1 - y0).max(1.0);
+    let dpi = (f64::from(STRUCTURE_SIZE) * 72.0 / side).clamp(72.0, MAX_CROP_DPI);
+    let scale = dpi / 72.0;
+    let (px, py) = ((x0 * scale).floor(), (y0 * scale).floor());
+    let args: Vec<OsString> = vec![
+        "-f".into(),
+        number.to_string().into(),
+        "-l".into(),
+        number.to_string().into(),
+        "-r".into(),
+        format!("{dpi:.2}").into(),
+        "-x".into(),
+        px.to_string().into(),
+        "-y".into(),
+        py.to_string().into(),
+        "-W".into(),
+        ((x1 - x0) * scale).round().to_string().into(),
+        "-H".into(),
+        ((y1 - y0) * scale).round().to_string().into(),
+        path.into(),
+    ];
+    let (width, height, rgb) = ppm(args)?;
+    let (left, top) = (px / scale, py / scale);
+    let (w, h) = (width as f64 / scale, height as f64 / scale);
+    let elements: Vec<structure::Element> = model
+        .recognize(&rgb, width, height)?
+        .into_iter()
+        .map(|e| {
+            let r = e.region;
+            let b = [
+                left + f64::from(r.x0) * w,
+                top + f64::from(r.y0) * h,
+                left + f64::from(r.x1) * w,
+                top + f64::from(r.y1) * h,
+            ];
+            (e.label, b, r.score)
+        })
+        .collect();
+    Ok(structure::table(page, region, &elements))
+}
+
 /// One page as RGB, longest side [`INPUT_SIZE`] pixels.
 fn render(path: &Path, page: u32) -> Result<(usize, usize, Vec<u8>), ErrorInfo> {
-    let args: Vec<OsString> = vec![
+    ppm(vec![
         "-f".into(),
         page.to_string().into(),
         "-l".into(),
@@ -114,7 +205,10 @@ fn render(path: &Path, page: u32) -> Result<(usize, usize, Vec<u8>), ErrorInfo> 
         "-scale-to".into(),
         INPUT_SIZE.to_string().into(),
         path.into(),
-    ];
+    ])
+}
+
+fn ppm(args: Vec<OsString>) -> Result<(usize, usize, Vec<u8>), ErrorInfo> {
     let out = exec::run(PDFTOPPM, args).map_err(|err| match err {
         ExecError::Missing(_) => err.into(),
         err => backend_error(err),

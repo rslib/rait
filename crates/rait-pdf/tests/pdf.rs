@@ -217,9 +217,21 @@ fn model_finds_the_same_tables() {
     .unwrap();
     assert_eq!(found.detector, rait_pdf::Detector::Tatr);
     let pages: Vec<u32> = found.tables.iter().map(|t| t.page).collect();
-    assert_eq!(pages, [1, 2, 4, 4]);
-    let header: Vec<&String> = found.tables[0].rows[0].keys().collect();
-    assert_eq!(header, ["Region", "Q1", "Q2", "Growth"]);
+    assert_eq!(pages, [1, 2, 4, 4, 5, 6]);
+    assert_eq!(found.tables[4].rows.len(), 70);
+    let headers: Vec<Vec<&String>> = found
+        .tables
+        .iter()
+        .map(|t| t.rows[0].keys().collect())
+        .collect();
+    assert_eq!(headers[0], ["Region", "Q1", "Q2", "Growth"]);
+    assert_eq!(headers[1], ["System", "Description", "Latency (ms)"]);
+    assert_eq!(
+        headers[2],
+        ["Workload", "Latency (us) p50", "Latency (us) p99", "Ops"]
+    );
+    assert_eq!(headers[3], ["Setting", "Value"]);
+    assert_eq!(found.tables[4].end_page, Some(6));
 }
 
 #[test]
@@ -235,4 +247,21 @@ fn model_detector_without_model_says_how_to_install() {
     .unwrap_err();
     assert_eq!(err.code, ErrorCode::DependencyMissing);
     assert!(err.hint.as_deref().unwrap().contains("rait models fetch"));
+}
+
+#[test]
+fn long_table_joins_across_pages_but_captioned_one_does_not() {
+    let found = rait_pdf::tables(&rait_pdf::TablesRequest {
+        path: tables_fixture(),
+        pages: PageRange::parse(Some("5-6")).unwrap(),
+        detector: DetectorChoice::Heuristic,
+    })
+    .unwrap();
+    let spans: Vec<(u32, Option<u32>, usize)> = found
+        .tables
+        .iter()
+        .map(|t| (t.page, t.end_page, t.rows.len()))
+        .collect();
+    assert_eq!(spans, [(5, Some(6), 70), (6, None, 3)]);
+    assert_eq!(found.tables[0].rows[69]["Node"], "node70");
 }
