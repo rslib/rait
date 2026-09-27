@@ -827,3 +827,39 @@ fn pdf_references_hide_entry_text_unless_asked() {
     ]));
     assert!(full.contains("{n,authors,title,year,id,text}"));
 }
+
+#[test]
+fn text_format_is_for_people() {
+    let out = Sandbox::new()
+        .cmd()
+        .env("COLUMNS", "200")
+        .args(["--format", "text", "pdf", "info", FIXTURE, TWO_PAGES])
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert!(text.starts_with("FILE"), "{text}");
+    assert!(
+        text.contains("simple.pdf") && text.contains("  1  "),
+        "{text}"
+    );
+    assert!(!text.contains('{'), "{text}");
+    let notes = String::from_utf8(out.stderr).unwrap();
+    assert!(notes.contains("next: Run `rait pdf text"), "{notes}");
+    if has("pdftotext") {
+        let page = stdout(&run(&["--format", "text", "pdf", "text", FIXTURE]));
+        assert!(!page.contains("next:") && !page.contains('{'), "{page}");
+    }
+}
+
+#[test]
+fn text_format_covers_home_view_and_usage_errors() {
+    let home = run(&["--format", "text"]);
+    assert!(stdout(&home).starts_with("bin "), "{}", stdout(&home));
+    let bad = run(&["pdf", "info", "--bogus", "--format", "text"]);
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(
+        stdout(&bad).starts_with("error: unexpected argument '--bogus'"),
+        "{}",
+        stdout(&bad)
+    );
+}

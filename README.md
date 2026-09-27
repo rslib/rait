@@ -76,7 +76,7 @@ rait table rows tests/fixtures/sample.parquet --rows 1-5 --columns region,revenu
 rait table rows tests/fixtures/sample.sqlite --sheet sales
 ```
 
-Output is [TOON](https://toonformat.dev/) by default. Add `--format json` when a script parses it.
+Output is [TOON](https://toonformat.dev/) by default. Add `--format json` when a script parses it, or `--format text` to read it yourself: aligned tables, plain page text, and notes and next steps on stderr.
 
 ## External programs
 

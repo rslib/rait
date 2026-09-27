@@ -1,6 +1,6 @@
 pub const DESCRIPTION: &str = "Read and transform local PDFs, documents, tables, images, archives and media for coding agents";
 
-pub const SKILL_DESCRIPTION: &str = "Read, search and transform local PDF, DOCX, PPTX, EPUB and HTML files and preview CSV, Excel, ODS and Parquet tables, inspect, shrink and OCR images, list, read and safely extract archives, and inspect audio and video with RAIT. Use when reading, summarizing, searching or transforming PDFs, office documents, data files, images, archives or media from an agent.";
+pub const SKILL_DESCRIPTION: &str = "Read, search and transform local PDF, DOCX, PPTX, EPUB, HTML and Jupyter notebook files and preview CSV, Excel, ODS, Parquet and SQLite tables, inspect, shrink and OCR images, list, read and safely extract archives, and inspect audio and video with RAIT. Use when reading, summarizing, searching or transforming PDFs, office documents, data files, images, archives or media from an agent.";
 
 /// Usage guidance shared by the home view and the generated PDF skill.
 pub const GUIDE: &[&str] = &[

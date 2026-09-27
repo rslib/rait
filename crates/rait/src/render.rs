@@ -61,7 +61,12 @@ pub fn emit(format: Format, output: Output) -> ExitCode {
     match format {
         Format::Json => print_value(format, &json!(output.records)),
         Format::Toon => print_value(format, &toon(output)),
-        Format::Text => output.records.iter().for_each(print_text),
+        Format::Text => {
+            let (noun, key) = (output.noun, output.key);
+            let (out, notes) = crate::text::render(&toon(output), noun, key);
+            write_stdout(&out);
+            eprint!("{notes}");
+        }
     }
     ExitCode::from(if ok { 0 } else { 1 })
 }
@@ -75,6 +80,12 @@ pub fn emit_usage_error(format: Format, err: ErrorInfo) -> ExitCode {
 }
 
 pub fn print_value(format: Format, value: &Value) {
+    if format == Format::Text {
+        let (out, notes) = crate::text::document(value);
+        write_stdout(&out);
+        eprint!("{notes}");
+        return;
+    }
     let text = match format {
         Format::Json => serde_json::to_string(value).map_err(|err| err.to_string()),
         _ => toon_format::encode_default(value)
@@ -283,29 +294,6 @@ pub fn shell_quote(text: &str) -> String {
     } else {
         format!("'{}'", text.replace('\'', r"'\''"))
     }
-}
-
-fn print_text(record: &Record) {
-    let line = match (&record.data, &record.error) {
-        (Some(data), _) => match data
-            .get("pages")
-            .or(data.get("parts"))
-            .and_then(Value::as_array)
-        {
-            Some(units) => {
-                units
-                    .iter()
-                    .filter_map(|unit| unit["text"].as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n\n")
-                    + "\n"
-            }
-            None => format!("{}: {data}\n", record.input),
-        },
-        (None, Some(err)) => format!("{}: {:?}: {}\n", record.input, err.code, err.message),
-        (None, None) => return,
-    };
-    write_stdout(&line);
 }
 
 #[cfg(test)]

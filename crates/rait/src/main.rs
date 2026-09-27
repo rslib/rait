@@ -1,6 +1,7 @@
 mod guide;
 mod render;
 mod search;
+mod text;
 
 use clap::error::{ContextKind, ContextValue, ErrorKind as ClapErrorKind};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
@@ -606,7 +607,7 @@ enum SkillsCommand {
     List,
     /// Print the embedded skill Markdown
     Show { name: String },
-    /// Install the PDF skill for an agent
+    /// Install the rait skill for an agent
     #[command(
         after_help = "Examples:\n  rait skills install --target claude\n  rait skills install --target pi --scope project"
     )]
@@ -641,8 +642,18 @@ fn main() -> ExitCode {
         write_stdout(&format!("{VERSION}\n"));
         return ExitCode::SUCCESS;
     }
-    if args.len() == 1 {
-        print_value(Format::Toon, &home());
+    // `rait` alone, or with only `--format`, shows the home view.
+    let rest: Vec<&str> = args[1..].iter().map(String::as_str).collect();
+    let home_format = match rest.as_slice() {
+        [] => Some(Format::Toon),
+        ["--format", f] => Format::from_str(f, false).ok(),
+        [flag] => flag
+            .strip_prefix("--format=")
+            .and_then(|f| Format::from_str(f, false).ok()),
+        _ => None,
+    };
+    if let Some(format) = home_format {
+        print_value(format, &home());
         return ExitCode::SUCCESS;
     }
     let cli = match Cli::try_parse() {
@@ -1883,12 +1894,16 @@ fn tilde(path: &Path) -> String {
     }
 }
 
+/// The `--format` in `args`, read without clap for errors clap reports.
 fn format_hint(args: &[String]) -> Format {
-    let json = args
+    let value = args
         .windows(2)
-        .any(|pair| pair[0] == "--format" && pair[1] == "json")
-        || args.iter().any(|arg| arg == "--format=json");
-    if json { Format::Json } else { Format::Toon }
+        .find(|pair| pair[0] == "--format")
+        .map(|pair| pair[1].as_str())
+        .or_else(|| args.iter().find_map(|arg| arg.strip_prefix("--format=")));
+    value
+        .and_then(|v| Format::from_str(v, false).ok())
+        .unwrap_or(Format::Toon)
 }
 
 fn usage_error(err: &clap::Error, args: &[String]) -> ErrorInfo {

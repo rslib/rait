@@ -1,6 +1,6 @@
 ---
 name: rait
-description: Read, search and transform local PDF, DOCX, PPTX, EPUB and HTML files and preview CSV, Excel, ODS and Parquet tables, inspect, shrink and OCR images, list, read and safely extract archives, and inspect audio and video with RAIT. Use when reading, summarizing, searching or transforming PDFs, office documents, data files, images, archives or media from an agent.
+description: Read, search and transform local PDF, DOCX, PPTX, EPUB, HTML and Jupyter notebook files and preview CSV, Excel, ODS, Parquet and SQLite tables, inspect, shrink and OCR images, list, read and safely extract archives, and inspect audio and video with RAIT. Use when reading, summarizing, searching or transforming PDFs, office documents, data files, images, archives or media from an agent.
 ---
 
 # RAIT
