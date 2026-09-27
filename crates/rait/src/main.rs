@@ -171,6 +171,17 @@ enum PdfCommand {
         #[arg(long)]
         headings: bool,
     },
+    /// Bibliography entries with authors, title, year and DOI or arXiv ID
+    #[command(
+        after_help = "Examples:\n  rait pdf references paper.pdf\n  rait pdf references paper.pdf --fields text\n\nEntries are split by their [n] or n. labels, else by hanging indent, and parsed\nheuristically; check odd ones against the full text with --fields text."
+    )]
+    References {
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+        /// Extra TOON columns. JSON always has every field
+        #[arg(long, value_enum, value_delimiter = ',')]
+        fields: Vec<ReferenceField>,
+    },
     /// Find lines containing a literal query
     #[command(
         after_help = "Examples:\n  rait pdf search paper.pdf \"cache miss\"\n  rait pdf search *.pdf latency -i --pages 1-5"
@@ -540,6 +551,12 @@ enum InfoField {
     PageSize,
 }
 
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
+enum ReferenceField {
+    /// The whole entry as printed
+    Text,
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum ImageArg {
     Png,
@@ -796,6 +813,28 @@ fn run_pdf(command: PdfCommand, jobs: usize, max_chars: usize) -> Result<Output,
             }),
         )
         .help(["Run `rait pdf text <file> --pages <page>` to read a section from its first page"]),
+        PdfCommand::References { files, fields } => Output::new(
+            "pdfs",
+            "file",
+            each(jobs, "pdf.references", files, |path| {
+                let mut found = rait_pdf::references(path)?;
+                let warnings = std::mem::take(&mut found.warnings);
+                item(found, None, warnings)
+            }),
+        )
+        .shape(move |mut data| {
+            if !fields.contains(&ReferenceField::Text)
+                && let Some(refs) = data["references"].as_array_mut()
+            {
+                for r in refs {
+                    if let Some(r) = r.as_object_mut() {
+                        r.remove("text");
+                    }
+                }
+            }
+            data
+        })
+        .help(["Run `rait pdf references <file> --fields text` to see each entry as printed"]),
         PdfCommand::Search {
             files,
             query,

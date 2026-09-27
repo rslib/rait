@@ -127,7 +127,7 @@ pub fn section(entries: &[OutlineEntry], name: &str, pages: u32) -> Option<Secti
 }
 
 /// `title` without a leading section number such as `2.1`, `IV.` or `A.`.
-fn unnumbered(title: &str) -> &str {
+pub fn unnumbered(title: &str) -> &str {
     let title = title.trim_start();
     let Some((first, rest)) = title.split_once(' ') else {
         return title;
@@ -166,6 +166,9 @@ pub fn heading_line(lines: &[&str], title: &str) -> Option<usize> {
     Some(number.unwrap_or(i))
 }
 
+/// Pages from which bookmarks all on one page are suspect.
+const LONG_PDF: u32 = 5;
+
 /// Bookmarks worth trusting: at least two, not mostly page labels such as
 /// `Page 3` or bare numbers, and not all on one page of a longer PDF.
 pub fn useful(bookmarks: &[OutlineEntry], pages: u32) -> bool {
@@ -179,7 +182,7 @@ pub fn useful(bookmarks: &[OutlineEntry], pages: u32) -> bool {
         })
         .count();
     let one_page = bookmarks.windows(2).all(|w| w[0].page == w[1].page);
-    bookmarks.len() >= 2 && labels * 2 < bookmarks.len() && !(one_page && pages > 1)
+    bookmarks.len() >= 2 && labels * 2 < bookmarks.len() && !(one_page && pages >= LONG_PDF)
 }
 
 /// Headings in `layouts`, which start at page `first`: short lines that open
@@ -527,6 +530,7 @@ mod tests {
         assert!(!useful(&labels, 3));
         assert!(!useful(&[entry("Title", 1)], 3));
         assert!(!useful(&[entry("Title", 1), entry("Abstract", 1)], 9));
+        assert!(useful(&[entry("Intro", 1), entry("Results", 1)], 2));
         assert!(useful(&[entry("Intro", 1), entry("Method", 2)], 9));
     }
 

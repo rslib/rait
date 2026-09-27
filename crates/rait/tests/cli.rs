@@ -329,7 +329,9 @@ fn missing_subcommand_lists_subcommands() {
     let out = run(&["pdf"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(
-        stdout(&out).contains("<info|text|tables|outline|search|figures|render|split|merge|ocr>")
+        stdout(&out).contains(
+            "<info|text|tables|outline|references|search|figures|render|split|merge|ocr>"
+        )
     );
 }
 
@@ -804,4 +806,24 @@ fn pdf_text_section_conflicts_with_pages() {
             .unwrap()
             .contains("closes the document")
     );
+}
+
+#[test]
+fn pdf_references_hide_entry_text_unless_asked() {
+    if !has("pdftotext") {
+        return;
+    }
+    let plain = stdout(&run(&["pdf", "references", &fixture("figures.pdf")]));
+    assert!(
+        plain.contains("references[3]{n,authors,title,year,id}:"),
+        "{plain}"
+    );
+    let full = stdout(&run(&[
+        "pdf",
+        "references",
+        &fixture("figures.pdf"),
+        "--fields",
+        "text",
+    ]));
+    assert!(full.contains("{n,authors,title,year,id,text}"));
 }

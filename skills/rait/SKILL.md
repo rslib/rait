@@ -15,6 +15,7 @@ Read and transform local PDFs, documents, tables, images, archives and media for
 - Run `rait pdf search <file>... "<query>"` to find lines (-i ignores case), then read hit pages with `rait pdf text <file> --pages <page>`.
 - Pass many PDFs to one command instead of a shell loop; --jobs <n> bounds the parallel work.
 - Run `rait pdf figures <file> --output <dir>` to save each captioned figure as a PNG you can look at, with its caption.
+- Run `rait pdf references <file>` for the bibliography as entries with authors, title, year and DOI, arXiv ID or URL; add --fields text to check odd entries against the printed text.
 - Run `rait pdf render|split|merge <file>... --output <path>` to write files; add --force to replace existing ones.
 - Run `rait pdf ocr <file> --output <dir>` only when `rait pdf text` finds no usable text.
 - Run `rait doc text <file>... [--parts <range>]` to read DOCX, PPTX, EPUB, HTML or Jupyter notebooks as Markdown with tables; parts are sections, slides or chapters; notebook outputs are shortened and images left out.

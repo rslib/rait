@@ -4,6 +4,7 @@ mod figures;
 mod files;
 mod layout;
 mod outline;
+mod references;
 mod structure;
 mod tables;
 
@@ -355,6 +356,79 @@ fn trim_section(pages: &mut [PageText], section: &outline::Section) {
             last.text = lines[..i + skip].join("\n");
         }
     }
+}
+
+pub use references::Reference;
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PdfReferences {
+    pub total_pages: u32,
+    /// Pages the bibliography spans, such as `12-14`.
+    pub range: String,
+    pub references: Vec<Reference>,
+    #[serde(skip)]
+    pub warnings: Vec<String>,
+}
+
+/// The bibliography, found by its `References` (or `Bibliography`) heading in
+/// the outline, else by that heading line in the text from the end.
+pub fn references(path: &Path) -> Result<PdfReferences, ErrorInfo> {
+    let info = info(path)?;
+    let mut warnings = info.warnings;
+    let found = outline(path, false)?;
+    // A bibliography has no subsections: it ends at the next outline entry of
+    // any level, such as an appendix a guessed outline puts one level down.
+    let at = found.entries.iter().position(|e| {
+        references::HEADINGS.contains(&outline::compact(outline::unnumbered(&e.title)).as_str())
+    });
+    let (first, last, start, end) = match at {
+        Some(i) => {
+            let entry = &found.entries[i];
+            let next = found.entries.get(i + 1);
+            (
+                entry.page,
+                next.map_or(info.pages, |n| n.page.max(entry.page)),
+                Some(entry.title.clone()),
+                next.map(|n| n.title.clone()),
+            )
+        }
+        None => {
+            let layouts = bbox(path, 1, info.pages)?;
+            let heading = layouts.iter().enumerate().rev().find_map(|(i, page)| {
+                page.blocks.iter().flatten().find_map(|line| {
+                    let text: Vec<&str> =
+                        line.iter().map(|&w| page.words[w].text.as_str()).collect();
+                    let text = text.join(" ");
+                    references::HEADINGS
+                        .contains(&outline::compact(outline::unnumbered(&text)).as_str())
+                        .then_some((i as u32 + 1, text))
+                })
+            });
+            match heading {
+                Some((page, title)) => (page, info.pages, Some(title), None),
+                None => {
+                    warnings.push("No References or Bibliography heading was found.".into());
+                    return Ok(PdfReferences {
+                        total_pages: info.pages,
+                        range: "none".into(),
+                        references: vec![],
+                        warnings,
+                    });
+                }
+            }
+        }
+    };
+    let layouts = bbox(path, first, last)?;
+    Ok(PdfReferences {
+        total_pages: info.pages,
+        range: if first == last {
+            first.to_string()
+        } else {
+            format!("{first}-{last}")
+        },
+        references: references::parse(&layouts, start.as_deref(), end.as_deref()),
+        warnings,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

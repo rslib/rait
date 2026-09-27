@@ -302,7 +302,8 @@ fn outline_reads_bookmarks_then_guesses_headings() {
         [
             (1, "1 Introduction"),
             (2, "1.1 Method details"),
-            (1, "2 Results")
+            (1, "2 Results"),
+            (1, "References")
         ]
     );
     assert!(guessed.warnings[0].contains("guessed"));
@@ -350,4 +351,40 @@ fn text_reads_one_section_by_title() {
     assert!(!text.contains("Results"));
     let err = rait_pdf::text(&req("Discussion")).unwrap_err();
     assert!(err.message.contains("Introduction"));
+}
+
+#[test]
+fn references_parse_ieee_acm_and_author_year_entries() {
+    let found = rait_pdf::references(&figures_fixture()).unwrap();
+    let field = |f: fn(&rait_pdf::Reference) -> Option<&str>| {
+        found.references.iter().map(f).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        field(|r| r.authors.as_deref()),
+        [
+            Some("J. Smith and K. Lee"),
+            Some("Jane Doe and John Roe"),
+            Some("Smith, J. and Lee, K")
+        ]
+    );
+    assert_eq!(
+        field(|r| r.title.as_deref()),
+        [
+            Some("Fast storage for things"),
+            Some("A Study of Caches"),
+            Some("Learning to rank")
+        ]
+    );
+    assert_eq!(
+        field(|r| r.year.as_deref()),
+        [Some("2020"), Some("2021"), Some("2019")]
+    );
+    assert_eq!(
+        field(|r| r.id.as_deref()),
+        [
+            Some("doi:10.1145/12345.678"),
+            Some("https://example.org/caches"),
+            Some("arXiv:1901.01234")
+        ]
+    );
 }
