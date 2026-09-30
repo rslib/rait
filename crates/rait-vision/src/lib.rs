@@ -164,7 +164,7 @@ fn run(
     }
     let plane = width * height;
     let mut pixels = vec![0f32; 3 * plane];
-    for (i, px) in rgb.chunks_exact(3).enumerate() {
+    for (i, px) in rgb.as_chunks::<3>().0.iter().enumerate() {
         for c in 0..3 {
             pixels[c * plane + i] = (px[c] as f32 / 255.0 - MEAN[c]) / STD[c];
         }
@@ -195,8 +195,10 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
 /// that is "no object" or below [`MIN_STRUCTURE_SCORE`].
 fn elements(logits: &[f32], boxes: &[f32]) -> Vec<Element> {
     logits
-        .chunks_exact(LABELS.len() + 1)
-        .zip(boxes.chunks_exact(4))
+        .as_chunks::<{ LABELS.len() + 1 }>()
+        .0
+        .iter()
+        .zip(boxes.as_chunks::<4>().0)
         .filter_map(|(l, b)| {
             let p = softmax(l);
             let (best, &score) = p.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1))?;
@@ -213,8 +215,10 @@ fn elements(logits: &[f32], boxes: &[f32]) -> Vec<Element> {
 /// [`MIN_SCORE`]; boxes are (cx, cy, w, h) as fractions of the image.
 fn regions(logits: &[f32], boxes: &[f32]) -> Vec<Region> {
     logits
-        .chunks_exact(3)
-        .zip(boxes.chunks_exact(4))
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .zip(boxes.as_chunks::<4>().0)
         .filter_map(|(l, b)| {
             let p = softmax(l);
             let score = p[0].max(p[1]);
