@@ -376,7 +376,9 @@ fn write(image: &DynamicImage, target: Target, quality: u8, path: &Path) -> Resu
             image.height(),
             image::ExtendedColorType::Rgb8,
         ),
-        Target::Png => image.write_to(&mut out, ImageFormat::Png),
+        Target::Png => {
+            png(image).and_then(|bytes| out.write_all(&bytes).map_err(image::ImageError::IoError))
+        }
         Target::Gif => {
             DynamicImage::ImageRgba8(image.to_rgba8()).write_to(&mut out, ImageFormat::Gif)
         }
@@ -392,6 +394,13 @@ fn write(image: &DynamicImage, target: Target, quality: u8, path: &Path) -> Resu
         .with_detail(e.to_string())
     })?;
     out.flush().map_err(|e| write_error("write the output", e))
+}
+
+/// Lossless: the pixels are unchanged, only the deflate stream is tuned.
+fn png(image: &DynamicImage) -> image::ImageResult<Vec<u8>> {
+    let mut raw = Vec::new();
+    image.write_to(&mut std::io::Cursor::new(&mut raw), ImageFormat::Png)?;
+    Ok(oxipng::optimize_from_memory(&raw, &oxipng::Options::from_preset(2)).unwrap_or(raw))
 }
 
 /// JPEG has no alpha: composite transparent pixels over white.

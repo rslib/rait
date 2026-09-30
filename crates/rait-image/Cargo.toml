@@ -9,6 +9,7 @@ license.workspace = true
 image = { version = "0.25", default-features = false, features = ["rayon", "bmp", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 kamadak-exif = "0.6"
 libheif-rs = "3"
+oxipng = { version = "10.2.1", default-features = false, features = ["parallel", "freestanding"] }
 rait-core = { path = "../rait-core" }
 serde.workspace = true
 
