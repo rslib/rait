@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 image = { version = "0.25", default-features = false, features = ["rayon", "bmp", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 kamadak-exif = "0.6"
+libheif-rs = "3"
 rait-core = { path = "../rait-core" }
 serde.workspace = true
 

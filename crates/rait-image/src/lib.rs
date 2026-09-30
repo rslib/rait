@@ -2,7 +2,8 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::webp::WebPEncoder;
 use image::imageops::FilterType;
 use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Rgb, RgbImage};
+use image::{DynamicImage, ImageBuffer, ImageDecoder, ImageFormat, ImageReader, Rgb, RgbImage};
+use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 use rait_core::exec::{self, Dependency, ExecError};
 use rait_core::{ErrorCode, ErrorInfo, check_input, path_to_protocol};
 use serde::Serialize;
@@ -15,7 +16,7 @@ const TESSERACT: &str = "tesseract";
 
 pub const EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "ico", "pnm", "pbm", "pgm", "ppm",
-    "qoi", "tga",
+    "qoi", "tga", "heic", "heif",
 ];
 
 pub const DEPENDENCIES: &[Dependency] = &[Dependency {
@@ -113,23 +114,50 @@ pub struct OcrText {
 }
 
 pub fn info(path: &Path) -> Result<ImageInfo, ErrorInfo> {
+    if let Some(heic) = read_heic(path)? {
+        let exif = parse_exif(heic.exif.unwrap_or_default());
+        return Ok(describe(
+            "heic".to_string(),
+            exif,
+            Orientation::NoTransforms,
+            (heic.image.width(), heic.image.height()),
+            heic.image.color(),
+        ));
+    }
     let (format, mut decoder) = open(path)?;
-    let exif = decoder.exif_metadata().ok().flatten().and_then(|raw| {
-        // JPEG APP1 data may still carry its `Exif\0\0` marker.
-        let tiff = raw
-            .strip_prefix(b"Exif\0\0")
-            .map_or(raw.clone(), <[u8]>::to_vec);
-        // Real files often have small EXIF faults; keep what parses.
-        let mut reader = exif::Reader::new();
-        reader.continue_on_error(true);
-        match reader.read_raw(tiff) {
-            Ok(exif) => Some(exif),
-            Err(exif::Error::PartialResult(partial)) => Some(partial.into_inner().0),
-            Err(_) => None,
-        }
-    });
+    let exif = decoder.exif_metadata().ok().flatten().and_then(parse_exif);
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let (mut width, mut height) = decoder.dimensions();
+    Ok(describe(
+        format_name(format),
+        exif,
+        orientation,
+        decoder.dimensions(),
+        decoder.color_type(),
+    ))
+}
+
+fn parse_exif(raw: Vec<u8>) -> Option<exif::Exif> {
+    // JPEG APP1 data may still carry its `Exif\0\0` marker.
+    let tiff = raw
+        .strip_prefix(b"Exif\0\0")
+        .map_or(raw.clone(), <[u8]>::to_vec);
+    // Real files often have small EXIF faults; keep what parses.
+    let mut reader = exif::Reader::new();
+    reader.continue_on_error(true);
+    match reader.read_raw(tiff) {
+        Ok(exif) => Some(exif),
+        Err(exif::Error::PartialResult(partial)) => Some(partial.into_inner().0),
+        Err(_) => None,
+    }
+}
+
+fn describe(
+    format: String,
+    exif: Option<exif::Exif>,
+    orientation: Orientation,
+    (mut width, mut height): (u32, u32),
+    color: image::ColorType,
+) -> ImageInfo {
     if swaps_sides(orientation) {
         (width, height) = (height, width);
     }
@@ -144,11 +172,11 @@ pub fn info(path: &Path) -> Result<ImageInfo, ErrorInfo> {
         (Some(make), Some(model)) => Some(format!("{make} {model}")),
         (make, model) => make.or(model),
     };
-    Ok(ImageInfo {
-        format: format_name(format),
+    ImageInfo {
+        format,
         width,
         height,
-        color: format!("{:?}", decoder.color_type()).to_lowercase(),
+        color: format!("{color:?}").to_lowercase(),
         orientation: exif.as_ref().and_then(|exif| {
             exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)?
                 .value
@@ -158,20 +186,26 @@ pub fn info(path: &Path) -> Result<ImageInfo, ErrorInfo> {
             .or_else(|| field(exif::Tag::DateTime))
             .map(|t| iso_time(&t)),
         camera,
-    })
+    }
 }
 
 pub fn convert(req: &ConvertRequest) -> Result<Converted, ErrorInfo> {
-    let (format, mut decoder) = open(&req.path)?;
-    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut image = DynamicImage::from_decoder(decoder).map_err(unreadable)?;
-    image.apply_orientation(orientation);
+    let (default_target, mut image) = match read_heic(&req.path)? {
+        Some(heic) => (Target::Jpeg, heic.image),
+        None => {
+            let (format, mut decoder) = open(&req.path)?;
+            let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+            let mut image = DynamicImage::from_decoder(decoder).map_err(unreadable)?;
+            image.apply_orientation(orientation);
+            (Target::from_source(format), image)
+        }
+    };
     if let Some(max) = req.max
         && image.width().max(image.height()) > max
     {
         image = image.resize(max, max, FilterType::Lanczos3);
     }
-    let target = req.to.unwrap_or(Target::from_source(format));
+    let target = req.to.unwrap_or(default_target);
     let stem = req
         .path
         .file_stem()
@@ -247,7 +281,7 @@ fn open(path: &Path) -> Result<(ImageFormat, impl ImageDecoder), ErrorInfo> {
     check_input(path)?;
     let reader = ImageReader::open(path)
         .and_then(|r| r.with_guessed_format())
-        .map_err(|e| unreadable(e.into()))?;
+        .map_err(unreadable)?;
     let format = reader.format().ok_or_else(|| {
         ErrorInfo::new(
             ErrorCode::InvalidInput,
@@ -257,6 +291,70 @@ fn open(path: &Path) -> Result<(ImageFormat, impl ImageDecoder), ErrorInfo> {
     })?;
     let decoder = reader.into_decoder().map_err(unreadable)?;
     Ok((format, decoder))
+}
+
+struct Heic {
+    image: DynamicImage,
+    exif: Option<Vec<u8>>,
+}
+
+fn is_heic(path: &Path) -> bool {
+    let mut head = [0u8; 12];
+    let read = fs::File::open(path).and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head));
+    read.is_ok()
+        && &head[4..8] == b"ftyp"
+        && matches!(
+            &head[8..12],
+            b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"msf1"
+        )
+}
+
+/// libheif applies the HEIF rotation and crop itself, so no EXIF orientation is left to apply.
+fn read_heic(path: &Path) -> Result<Option<Heic>, ErrorInfo> {
+    check_input(path)?;
+    if !is_heic(path) {
+        return Ok(None);
+    }
+    let ctx = path
+        .to_str()
+        .ok_or_else(|| unreadable("path is not UTF-8"))
+        .and_then(|p| HeifContext::read_from_file(p).map_err(unreadable))?;
+    let handle = ctx.primary_image_handle().map_err(unreadable)?;
+    let alpha = handle.has_alpha_channel();
+    let chroma = if alpha {
+        RgbChroma::Rgba
+    } else {
+        RgbChroma::Rgb
+    };
+    let decoded = LibHeif::new()
+        .decode(&handle, ColorSpace::Rgb(chroma), None)
+        .map_err(unreadable)?;
+    let plane = decoded
+        .planes()
+        .interleaved
+        .ok_or_else(|| unreadable("no interleaved pixel data"))?;
+    let channels = if alpha { 4 } else { 3 };
+    let row = plane.width as usize * channels;
+    let mut pixels = Vec::with_capacity(row * plane.height as usize);
+    for y in 0..plane.height as usize {
+        pixels.extend_from_slice(&plane.data[y * plane.stride..][..row]);
+    }
+    let image = if alpha {
+        ImageBuffer::from_raw(plane.width, plane.height, pixels).map(DynamicImage::ImageRgba8)
+    } else {
+        ImageBuffer::from_raw(plane.width, plane.height, pixels).map(DynamicImage::ImageRgb8)
+    }
+    .ok_or_else(|| unreadable("pixel buffer size mismatch"))?;
+    let mut ids = [0; 1];
+    let exif = (handle.metadata_block_ids(&mut ids, b"Exif") > 0)
+        .then(|| handle.metadata(ids[0]).ok())
+        .flatten()
+        .and_then(|blob| {
+            // The block starts with a 4-byte big-endian offset to the TIFF header.
+            let offset = u32::from_be_bytes(blob.get(..4)?.try_into().ok()?) as usize;
+            blob.get(4 + offset..).map(<[u8]>::to_vec)
+        });
+    Ok(Some(Heic { image, exif }))
 }
 
 fn write(image: &DynamicImage, target: Target, quality: u8, path: &Path) -> Result<(), ErrorInfo> {
@@ -335,7 +433,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
     matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
-fn unreadable(err: image::ImageError) -> ErrorInfo {
+fn unreadable(err: impl std::fmt::Display) -> ErrorInfo {
     ErrorInfo::new(
         ErrorCode::InvalidInput,
         "The file is not a supported image, or it is damaged.",
